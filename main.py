@@ -28,6 +28,10 @@ def main():
     FUNCTION: main
 
     DESCRIPTION: This is the main function for the project.
+
+    INPUTS: None
+
+    Outputs: None
     """
     return 0
 
