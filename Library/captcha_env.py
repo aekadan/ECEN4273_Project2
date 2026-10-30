@@ -1,8 +1,9 @@
 #############################################################
 #   FILE NAME: captcha_env.py
 #
-#   DESCRIPTION: This is the captcha environment file in which
-#   an offline captcha environment is created for the agent to interact with.
+#   DESCRIPTION: This is the captcha environment file in which 
+#   an offline captcha environment is created for the agent 
+#   to interact with.
 #
 #   Authors: Group 2
 #############################################################
@@ -118,11 +119,11 @@ class CaptchaEnv:
 
     DESCRIPTION: This class represents the captcha environment in which the agent interacts with the challenges.
 
-    INPUTS: source, min_targets, max_targets, max_mistakes, seed
+    INPUTS: source, min_targets, max_targets, seed
 
     OUTPUTS: None
     """
-    def __init__(self, source, min_targets=2, max_targets=5, max_mistakes=0, seed=None):
+    def __init__(self, source, min_targets=2, max_targets=5, seed=None):
         if not 1 <= min_targets <= max_targets <= NUM_TILES:
             raise ValueError(f"min_targets and max_targets must be between 1 and {NUM_TILES}, and min_targets must be less than or equal to max_targets.")
         if source.classes is None or len(source.classes) < 2:
@@ -131,7 +132,6 @@ class CaptchaEnv:
         self.source = source
         self.min_targets = min_targets
         self.max_targets = max_targets
-        self.max_mistakes = max_mistakes
         self.seed = seed
         self.rng = random.Random(seed)
 
@@ -158,6 +158,7 @@ class CaptchaEnv:
         return Challenge(id=str(uuid.uuid4()), target=target, tiles=tiles, labels=labels)
 
     def grade(self, challenge: Challenge, selection: list):
+
         """
         FUNCTION NAME: grade
         
@@ -189,6 +190,20 @@ class CaptchaEnv:
         return GradeResult(
             true_positives=true_positives, false_positives=false_positives, 
             false_negatives=false_negatives, true_negatives=true_negatives, 
-            passed=(false_positives <= self.max_mistakes and false_negatives == 0)
+            passed=(false_positives == 0 and false_negatives == 0)
             )
-        
+
+#############################################################
+#   FUNCTIONS
+#############################################################
+def render_grid(challenge: Challenge, tile_size=100):
+    """
+    FUNCTION NAME: render_grid
+
+    DESCRIPTION: This function renders the captcha challenge grid as an image.
+
+    INPUTS: challenge, tile_size
+
+    OUTPUTS: img
+    """
+    

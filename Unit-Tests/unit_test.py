@@ -19,9 +19,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "captcha-env"))
+sys.path.insert(0, str(PROJECT_ROOT / "Library"))
 
 from captcha_env import CaptchaEnv, Challenge, GradeResult, NUM_TILES
+from tile_sources import SyntheticTileSource, DEFAULT_CLASSES
 from main import main
 
 #############################################################
@@ -117,3 +118,10 @@ class TestCaptchaEnv:
         result = env.grade(challenge, [0, 4, 8, 1])
         assert not result.passed
         assert result.false_positives == 1
+
+class TestTileSources:
+    """
+    CLASS NAME: TestTileSources
+
+    DESCRIPTION: This class contains unit tests for the tile sources.
+    """
