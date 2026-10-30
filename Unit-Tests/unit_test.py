@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "captcha-env"))
 
-from captcha_env import CaptchaEnv, Challenge, NUM_TILES
+from captcha_env import CaptchaEnv, Challenge, GradeResult, NUM_TILES
 from main import main
 
 #############################################################
@@ -78,3 +78,42 @@ class TestCaptchaEnv:
         assert isinstance(challenge, Challenge)
         assert challenge.target in challenge.labels
         assert len(challenge.tiles) == NUM_TILES
+
+    def test_grade(self):
+        """
+        FUNCTION: test_grade
+
+        DESCRIPTION: This is the unit test for the grade function.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        class MockSource:
+            classes = ["cat", "dog"]
+            def get_tile(self, label, rng):
+                return label
+
+        env = CaptchaEnv(source=MockSource())
+
+        # Known challenge: tiles 0, 4 and 8 are cats
+        labels = ["cat", "dog", "dog",
+                "dog", "cat", "dog",
+                "dog", "dog", "cat"]
+        challenge = Challenge(id="test", target="cat", tiles=labels, labels=labels)
+
+        # Correct selection passes
+        result = env.grade(challenge, [0, 4, 8])
+        assert result.passed
+        assert result.true_positives == 3
+        assert result.true_negatives == 6
+
+        # Missing a tile fails
+        result = env.grade(challenge, [0, 4])
+        assert not result.passed
+        assert result.false_negatives == 1
+
+        # Selecting an extra tile fails
+        result = env.grade(challenge, [0, 4, 8, 1])
+        assert not result.passed
+        assert result.false_positives == 1

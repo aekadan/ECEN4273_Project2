@@ -13,6 +13,7 @@
 
 import random
 import uuid
+import numbers
 
 from dataclasses import dataclass, field
 from PIL import Image, ImageDraw
@@ -162,8 +163,32 @@ class CaptchaEnv:
         
         Description: This function grades the agent's selection for a given captcha challenge.
         
-        INPUTS: challenge, selection
+        INPUTS: challenge, selection (list of ints)
         
         OUTPUTS: GradeResult
         """
+        if not isinstance(selection, list):
+            raise TypeError("Selection must be a list of integers.")
+
+        if not all(isinstance(s, numbers.Integral) for s in selection):
+            raise TypeError("All elements in the selection must be integers.")
+
+        if any(s >= NUM_TILES or s < 0 for s in selection):
+            raise ValueError(f"Selection must be between 0 and {NUM_TILES - 1}.")
+        
+        if len(set(selection)) != len(selection):
+            raise ValueError("Selection must not contain duplicate indices.")
+        # Convert the challenge answer and selection to sets for easier comparison
+        answer = set(challenge.answer)
+        selection_set = set(selection)
+        # Calculate true positives, false positives, false negatives, and true negatives
+        true_positives = len(selection_set.intersection(answer))
+        false_positives = len(selection_set.difference(answer))
+        false_negatives = len(answer.difference(selection_set))
+        true_negatives = NUM_TILES - (true_positives + false_positives + false_negatives)
+        return GradeResult(
+            true_positives=true_positives, false_positives=false_positives, 
+            false_negatives=false_negatives, true_negatives=true_negatives, 
+            passed=(false_positives <= self.max_mistakes and false_negatives == 0)
+            )
         
