@@ -18,6 +18,7 @@ import numbers
 
 from dataclasses import dataclass, field
 from PIL import Image, ImageDraw
+from tile_sources import SyntheticTileSource
 #############################################################
 #   Files Import
 #############################################################

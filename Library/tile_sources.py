@@ -13,6 +13,7 @@
 
 import numbers
 import colorsys
+import random
 
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
@@ -47,7 +48,7 @@ class SyntheticTileSource:
     DESCRIPTION: This class represents a synthetic tile source, which generates
     tile images programmatically.
 
-    INPUTS: None
+    INPUTS: label, rng
 
     OUTPUTS: None
     """
@@ -85,6 +86,26 @@ class SyntheticTileSource:
             rgb = colorsys.hsv_to_rgb(hue, 0.4, 0.4)
             self.colors[word] = tuple(int(c * 255) for c in rgb)
 
+    def get_tile(self, label, rng):
+        """
+        FUNCTION NAME: get_tile
+        
+        DESCRIPTION: This function generates a tile image for a given class from the specified tile source.
+
+        INPUTS: tile_source, tile_class, size
+
+        OUTPUTS: PIL Image object representing the generated tile
+        """
+        if label not in self.classes:
+            raise ValueError(f"label must be one of the following: {self.classes}")
+        if not isinstance(rng, random.Random):
+            raise TypeError("rng must be an instance of random.Random.")
+
+        tile = Image.new("RGB", (self.size, self.size), self.colors[label])
+        ImageDraw.Draw(tile).text((10, 10), label.replace("_", " "), fill=(255, 255, 255))
+        return tile
+
+    
 #############################################################
 #   FUNCTIONS
 #############################################################

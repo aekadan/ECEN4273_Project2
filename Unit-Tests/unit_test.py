@@ -11,6 +11,8 @@
 #############################################################
 
 import sys
+import random
+import PIL
 from pathlib import Path
 
 #############################################################
@@ -125,3 +127,74 @@ class TestTileSources:
 
     DESCRIPTION: This class contains unit tests for the tile sources.
     """
+    def test_synthetic_tile_init(self):
+        """
+        FUNCTION: test_synthetic_tile_init
+
+        DESCRIPTION: This is the unit test for the SyntheticTileSource class initialization.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        # Test with valid classes and size
+        source = SyntheticTileSource(classes=["cat", "dog"], size=64)
+        assert source.classes == ["cat", "dog"]
+        assert source.size == 64
+
+        # Test with default classes and size
+        source = SyntheticTileSource()
+        assert source.classes == DEFAULT_CLASSES
+        assert source.size == 100
+
+        # Test with invalid classes (less than 2)
+        try:
+            source = SyntheticTileSource(classes=["cat"])
+            assert False, "Expected ValueError for less than 2 classes"
+        except ValueError:
+            pass
+
+        # Test with duplicate classes
+        try:
+            source = SyntheticTileSource(classes=["cat", "cat"])
+            assert False, "Expected ValueError for duplicate classes"
+        except ValueError:
+            pass
+
+        # Test with invalid size (non-integer)
+        try:
+            source = SyntheticTileSource(size="64")
+            assert False, "Expected TypeError for non-integer size"
+        except TypeError:
+            pass
+
+        # Test with invalid size (negative integer)
+        try:
+            source = SyntheticTileSource(size=-64)
+            assert False, "Expected ValueError for negative size"
+        except ValueError:
+            pass
+
+    def test_synthetic_tile_get_tile(self):
+        """
+        FUNCTION: test_synthetic_tile_get_tile
+
+        DESCRIPTION: This is the unit test for the get_tile method of the SyntheticTileSource class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        source = SyntheticTileSource(classes=["cat", "dog"], size=64)
+        rng = random.Random(42)
+
+        # Test getting a tile for a valid label
+        tile = source.get_tile("cat", rng)
+        assert isinstance(tile, PIL.Image.Image)  # Assuming get_tile returns a PIL Image object
+
+        # Test getting a tile for an invalid label
+        try:
+            tile = source.get_tile("bird", rng)
+            assert False, "Expected ValueError for invalid label"
+        except ValueError:
+            pass
