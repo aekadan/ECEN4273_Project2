@@ -9,26 +9,19 @@
 #############################################################
 #   Libraries
 #############################################################
-
-import sys
 import random
 import PIL
-from pathlib import Path
 
 #############################################################
 #   Files Import
 #############################################################
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "Library"))
-
-from captcha_env import CaptchaEnv, Challenge, GradeResult, NUM_TILES
-from tile_sources import SyntheticTileSource, DEFAULT_CLASSES
+from Library.gui import CaptchaApp
+from Library.captcha_env import CaptchaEnv, Challenge, GradeResult, NUM_TILES
+from Library.tile_sources import SyntheticTileSource, DEFAULT_CLASSES, TILE_SIZE
 from main import main
 
 #############################################################
-#   FUNCTIONS
+#   TEST CLASSES
 #############################################################
 class TestMain:
     """
@@ -198,3 +191,96 @@ class TestTileSources:
             assert False, "Expected ValueError for invalid label"
         except ValueError:
             pass
+
+class TestCaptchaApp:
+    """
+    CLASS NAME: TestCaptchaApp
+
+    DESCRIPTION: This class contains unit tests for the CaptchaApp class.
+    """
+    def test_init(self):
+        """
+        FUNCTION: test_init
+
+        DESCRIPTION: This is the unit test for the __init__ method of the CaptchaApp class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        # Create a mock environment
+        env = CaptchaEnv(source=SyntheticTileSource())
+        app = CaptchaApp(env, TILE_SIZE)
+
+        # Check that the attributes are initialized correctly
+        assert app.env == env
+        app.root.withdraw()
+        assert app.tile_size == TILE_SIZE
+        assert app.challenge is not None
+        assert isinstance(app.selected_tiles, set)
+        assert not app.submitted
+        app.root.destroy()
+
+    def test_submit(self):
+        """
+        FUNCTION: test_submit
+
+        DESCRIPTION: This is the unit test for the submit method of the CaptchaApp class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        # Create a mock environment
+        env = CaptchaEnv(source=SyntheticTileSource())
+        app = CaptchaApp(env, TILE_SIZE)
+
+        # Simulate selecting some tiles and submitting
+        app.selected_tiles = {0, 1, 2}
+        app.submit()
+
+        # Check that the submitted flag is set to True
+        assert app.submitted
+
+
+    def test_load_challenge(self):
+        """
+        FUNCTION: load_challenge_test
+
+        DESCRIPTION: This is the unit test for the load_challenge method of the CaptchaApp class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        # Create a mock environment
+        env = CaptchaEnv(source=SyntheticTileSource())
+        app = CaptchaApp(env, TILE_SIZE)
+
+        # Load a new challenge
+        app.load_challenge()
+
+        # Check that a new challenge is loaded
+        assert app.challenge is not None
+
+
+    def test_toggle_tile_selection(self):
+        """
+        FUNCTION: toggle_tile_selection_test
+
+        DESCRIPTION: This is the unit test for the toggle_tile_selection method of the CaptchaApp class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        # Create a mock environment
+        env = CaptchaEnv(source=SyntheticTileSource())
+        app = CaptchaApp(env, TILE_SIZE)
+
+        # Simulate toggling tile selection
+        app.toggle_tile_selection(0)
+        assert 0 in app.selected_tiles
+
+        app.toggle_tile_selection(0)
+        assert 0 not in app.selected_tiles

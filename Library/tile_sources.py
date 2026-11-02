@@ -48,7 +48,7 @@ class SyntheticTileSource:
     DESCRIPTION: This class represents a synthetic tile source, which generates
     tile images programmatically.
 
-    INPUTS: label, rng
+    INPUTS: classes, size, label, rng
 
     OUTPUTS: None
     """
