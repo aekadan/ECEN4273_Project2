@@ -17,36 +17,55 @@ Planned pipeline (see README.md):
 
 ## Current state
 
-The repo is an early scaffold. No dataset, model, or training code exists yet, and the framework is undecided (PyTorch with a pretrained ResNet has been suggested). The README's Dataset, Model, and Results tables are still _TBD_.
+An offline 3x3 challenge environment is being built by hand on the `story/Create-Recaptcha-Environment` branch. It replaces the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. No dataset, model, or training code exists yet, and the framework is undecided (PyTorch with a pretrained ResNet has been suggested). The README's Dataset, Model, and Results tables are still _TBD_.
 
-- `main.py`: entry point. `main()` currently just returns 0.
-- `Unit-Tests/unit_test.py`: one pytest test asserting `main() == 0`.
-- `README.md`: full project description and intended layout.
-- `LICENSE.md`: Academic Software License (ASL).
-- `.vscode/settings.json`: VS Code test settings (see Testing).
+### Done
 
-`Image-Data/` and `Library/` are described in the README but do not exist yet, since git does not track empty folders. There is no `requirements.txt` or `.gitignore` yet, and `__pycache__/` folders are committed by mistake.
+- `Library/__init__.py`: makes `Library` a package.
+- `Library/captcha_env.py`
+  - Constants `GRID_ROWS`, `GRID_COLS`, `NUM_TILES` (module-level, not attributes of `CaptchaEnv`).
+  - `Challenge` dataclass: `id`, `target`, `tiles` (PIL images), `labels`, `sources`, plus `answer` (indices matching the target) and `prompt` ("Select all images with busses."). Tiles are indexed 0-8, row by row from the top-left.
+  - `GradeResult` dataclass: `passed`, TP/FP/FN/TN counts, and `tiles_correct`.
+  - `CaptchaEnv(source, min_targets=2, max_targets=5, seed=None)`: `new_challenge()` returns a `Challenge`; `grade(challenge, selection)` takes a **list** of unique ints 0-8 and returns a `GradeResult`. A challenge passes only with zero false positives and zero false negatives.
+  - `render_grid(challenge, tile_size)`: **stub only** (docstring, returns `None`).
+- `Library/tile_sources.py`
+  - `TILE_SIZE = 100`, `IMAGE_EXT`, `DEFAULT_CLASSES` (`bus`, `bicycle`, `traffic_light`, `hydrant`).
+  - `SyntheticTileSource(classes=None, size=TILE_SIZE)`: placeholder tiles (a solid color per class with the class name drawn on). The tile-source interface is `.classes` plus `get_tile(label, rng)` returning a PIL image.
+- `Library/gui.py`: `CaptchaApp(env, tile_size=TILE_SIZE)`, a tkinter window for playing challenges by hand.
+  - `__init__` builds the window and calls `load_challenge()` as its last step, so `app.challenge` is set once the constructor returns. It does not call `mainloop()`; `run()` does.
+  - `load_challenge()` fetches a new challenge, converts its tiles to `ImageTk.PhotoImage` (references kept in `photo_image_refs`), and resets the selection and the `submitted` flag.
+  - `toggle_tile_selection(i)` adds or removes `i` from `selected_tiles` and sets a blue border. It is ignored after submitting.
+  - `submit()` grades the sorted selection, updates `score_attempts`/`score_correct` and the result label, and returns the `GradeResult` (or `None` if already submitted). It does **not** clear the selection; `load_challenge()` does.
+- `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI yet.
+- `Unit-Tests/unit_test.py`: 9 pytest tests covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, and `CaptchaApp` (init, submit, load_challenge, toggle).
+- `.vscode/settings.json`: pytest discovery on `Unit-Tests`, using `.venv`.
 
-### Offline challenge simulator (not merged yet)
+### Known issues
 
-An offline 3x3 challenge environment has been built but is not in the repo yet. It lives as a git patch (`offline-captcha-env.patch`, applied with `git am`) in the project's shared files. It adds:
+- Only `test_init` withdraws and destroys its Tk window. The other GUI tests leave Tk instances open, and `test_load_challenge` has failed intermittently with a `_tkinter` error. The planned fix is a shared pytest fixture that builds the app, calls `root.withdraw()`, yields, then calls `root.destroy()`. The GUI tests also don't pass a `seed` yet.
+- `__pycache__/` folders are committed by mistake, and there is no `requirements.txt`, `.gitignore`, or `pytest.ini` yet.
+- `Image-Data/` exists locally but is empty and untracked.
 
-- `Library/captcha_env.py`: challenge generator and grader (`CaptchaEnvironment`, `render_grid`).
-- `Library/tile_sources.py`: `SyntheticTileSource` (placeholder tiles) and `FolderTileSource` (reads `Image-Data/<split>/<class>/`).
-- `Library/solvers.py`: baseline solvers (`random`, `oracle`, `noisy`, manual) via `make_solver`.
-- `Library/benchmark.py`: `run_benchmark` for pass-rate measurement.
-- `Library/web_app.py`: standard-library web server to take challenges in a browser.
-- `main.py` subcommands: `bench`, `serve`, `show`, `play` (global options `--data`, `--seed`, `--max-mistakes`).
-- `requirements.txt` (`pillow`, `pytest`), `pytest.ini`, `.gitignore`, and 17 pytest tests.
+## Roadmap
 
-Once applied, the trained model should plug in as another solver so it can be benchmarked the same way. Update this section when the patch lands.
+In planned order:
+
+1. **Solvers** (`Library/solvers.py`): one contract, where a solver takes a `Challenge` and returns a list of tile indices. Baselines: `random`, `oracle` (returns `challenge.answer`, so it should pass 100%), and `noisy` (correct on each tile with probability p, so pass rate is roughly p^9). The trained CNN will plug in as another solver.
+2. **Benchmark** (`Library/benchmark.py`): `run_benchmark(env, solver, n)` reports pass rate and per-tile accuracy (optionally precision/recall from the `GradeResult` counts). Use a seeded env so solvers are compared on the same challenges. Its output feeds the README Results table.
+3. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
+4. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
+5. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>`, and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin.
+6. **Housekeeping**: `requirements.txt` (`pillow`, `pytest`), `.gitignore` (`__pycache__/`, `.venv/`, `.pytest_cache/`, `Image-Data/`, model weights), `git rm -r --cached` the committed `__pycache__` files, an optional `pytest.ini` (`pythonpath = .`, `testpaths = Unit-Tests`), then a PR to `main`.
+7. **Later**: a GUI option to highlight a solver's picks, for inspecting model mistakes.
+
+Update the Current state and Roadmap sections as items land.
 
 ## Intended layout
 
 ```
 ECEN4273_Project2/
 ├── Image-Data/     # train/ val/ test/, one subfolder per class (bicycle/, bus/, traffic_light/, ...)
-├── Library/        # project modules: data loading, model, training, inference
+├── Library/        # package: environment, tile sources, GUI, solvers, benchmark, model, training
 ├── Unit-Tests/     # pytest tests, files named *_test.py
 ├── main.py         # command-line entry point
 └── README.md
@@ -62,8 +81,19 @@ Python 3.10+ (the team uses 3.13 on Windows).
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 source .venv/bin/activate     # macOS / Linux
-pip install -r requirements.txt   # once requirements.txt exists
+pip install pillow pytest     # until requirements.txt exists
 ```
+
+tkinter ships with the standard Windows Python installer. On Linux it may need a separate package (e.g. `python3-tk`).
+
+## Imports
+
+`Library` is a package, so always run from the repository root.
+
+- Inside `Library/`, import sibling modules relatively: `from .captcha_env import CaptchaEnv`.
+- Outside it (`main.py`, tests), import through the package: `from Library.gui import CaptchaApp`.
+- Don't add `sys.path` hacks. Mixing `captcha_env` and `Library.captcha_env` loads the module twice with separate class objects.
+- Run a library module directly with `python -m Library.<module>`, not `python Library/<module>.py`.
 
 ## Testing
 
@@ -73,7 +103,11 @@ Run from the repository root:
 python -m pytest Unit-Tests
 ```
 
-Tests are plain pytest classes (`class TestMain:` with bare `assert`), not `unittest.TestCase`. The current `.vscode/settings.json` enables unittest discovery, which finds 0 tests for that reason; switch VS Code to pytest if you want tests in the Testing panel. Add tests for every new `Library/` module, and make sure the suite passes before committing.
+- Tests are plain pytest classes (`class TestMain:` with bare `assert`), not `unittest.TestCase`.
+- pytest only collects methods whose names **start with** `test_` (`test_submit`, not `submit_test`).
+- GUI tests create a real `Tk()`: withdraw it immediately and destroy it even when an assert fails (fixture or `try`/`finally`).
+- Prefer the real `CaptchaEnv(SyntheticTileSource(), seed=...)` over hand-made mocks. `load_challenge` needs real PIL tiles and a `prompt`.
+- Add tests for every new `Library/` module, and make sure the suite passes before committing.
 
 ## Conventions
 
@@ -91,26 +125,26 @@ Match the existing file style:
   #############################################################
   ```
 
-  followed by banner sections in this order: `Libraries`, `Files Import`, `FUNCTIONS`.
+  followed by banner sections in this order: `Libraries`, `Files Import`, `Global Constants`, `CLASSES`, `FUNCTIONS` (include only the ones a file needs).
 
-- Every function has a docstring in this format:
+- Every function, method, and class has a docstring in this format (classes use `CLASS NAME:` instead of `FUNCTION NAME:`):
 
   ```python
   """
-  FUNCTION: <name>
+  FUNCTION NAME: <name>
 
   DESCRIPTION: <what it does>
 
   INPUTS: <args, or None>
 
-  Outputs: <return value, or None>
+  OUTPUTS: <return value, or None>
   """
   ```
 
-- `snake_case` for functions and variables, `PascalCase` for classes, and `if __name__ == "__main__": main()` at the bottom of runnable scripts.
+- `snake_case` for functions and variables, `PascalCase` for classes, `UPPER_CASE` for module constants, and `if __name__ == "__main__": main()` at the bottom of runnable scripts.
 - Top-level folders use `Title-Case-With-Hyphens` (`Image-Data`, `Unit-Tests`).
 - Keep README.md in sync when adding commands, the dataset, the model, or results.
 
 ## Git
 
-The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`.
+The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`. Current work is on `story/Create-Recaptcha-Environment`.

@@ -238,9 +238,11 @@ class TestCaptchaApp:
         # Simulate selecting some tiles and submitting
         app.selected_tiles = {0, 1, 2}
         app.submit()
+        app.root.withdraw()
 
         # Check that the submitted flag is set to True
         assert app.submitted
+        app.root.destroy()
 
 
     def test_load_challenge(self):
@@ -259,9 +261,11 @@ class TestCaptchaApp:
 
         # Load a new challenge
         app.load_challenge()
+        app.root.withdraw()
 
         # Check that a new challenge is loaded
         assert app.challenge is not None
+        app.root.destroy()
 
 
     def test_toggle_tile_selection(self):
@@ -280,7 +284,10 @@ class TestCaptchaApp:
 
         # Simulate toggling tile selection
         app.toggle_tile_selection(0)
+        app.root.withdraw()
+
         assert 0 in app.selected_tiles
 
         app.toggle_tile_selection(0)
         assert 0 not in app.selected_tiles
+        app.root.destroy()
