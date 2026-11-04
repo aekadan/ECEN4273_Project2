@@ -36,13 +36,24 @@ An offline 3x3 challenge environment is being built by hand on the `story/Create
   - `load_challenge()` fetches a new challenge, converts its tiles to `ImageTk.PhotoImage` (references kept in `photo_image_refs`), and resets the selection and the `submitted` flag.
   - `toggle_tile_selection(i)` adds or removes `i` from `selected_tiles` and sets a blue border. It is ignored after submitting.
   - `submit()` grades the sorted selection, updates `score_attempts`/`score_correct` and the result label, and returns the `GradeResult` (or `None` if already submitted). It does **not** clear the selection; `load_challenge()` does.
-- `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI yet.
-- `Unit-Tests/unit_test.py`: 9 pytest tests covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, and `CaptchaApp` (init, submit, load_challenge, toggle).
+- `Library/solvers.py`: baseline solvers. The contract is `solve(challenge)`, returning a list of unique tile indices (ints 0-8) that `env.grade` accepts, plus a `name` attribute.
+  - `Solver(name, seed=None)`: base class. Stores `name` and its own `rng` (never the env's, so running a solver can't change the challenge sequence). Its `solve` raises `NotImplementedError`.
+  - `OracleSolver()`: returns `challenge.answer`, so it always passes.
+  - `RandomSolver(seed=None)`: selects each tile on a coin flip, so it passes about 1/512 of the time.
+  - `NoisySolver(p, seed=None)`: gets each tile right with probability `p`, so it passes about p^9 of the time. `p` is required and must be from 0 to 1. `p=1.0` always returns the answer, and `p=0.0` returns exactly the wrong tiles.
+  - `make_solver(name, seed=None, p=None)`: builds a solver from `"oracle"`, `"random"`, or `"noisy"`. Raises `ValueError` for an unknown name or for `"noisy"` without `p`.
+  - Only baselines may read `challenge.answer`/`labels`. The trained CNN will be another `Solver` that uses only `tiles` and `target`, and its class names must match `challenge.target`.
+- `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI or solvers yet.
+- `Unit-Tests/unit_test.py`: 13 pytest tests covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), and the solvers (oracle, random, noisy, `make_solver`).
 - `.vscode/settings.json`: pytest discovery on `Unit-Tests`, using `.venv`.
 
 ### Known issues
 
-- Only `test_init` withdraws and destroys its Tk window. The other GUI tests leave Tk instances open, and `test_load_challenge` has failed intermittently with a `_tkinter` error. The planned fix is a shared pytest fixture that builds the app, calls `root.withdraw()`, yields, then calls `root.destroy()`. The GUI tests also don't pass a `seed` yet.
+- **GUI tests fail intermittently on Windows (test-only; left unfixed on purpose).** The errors are `_tkinter.TclError`: `Can't find a usable init.tcl` or `tk.tcl`, `invalid command name "tcl_findLibrary"`, or `couldn't read file`. Rerun when you see one, and don't debug project code for it; any other failure is real.
+  - Cause: pytest's default fd capture closes the stdin/stdout/stderr handles Tcl stored on the first `Tk()`. Windows can then reuse those handle numbers for Tcl's startup files on a later `Tk()`, and Tcl mistakes them for its old channels (`OpenFileChannel` in `tclWinChan.c`).
+  - It is not caused by the GUI code, Pillow, or Tk windows left open, and it doesn't happen outside pytest. A bare `Tk()` under pytest reproduces it, and repeated `CaptchaApp`s without pytest do not.
+  - `python -m pytest Unit-Tests --capture=sys` avoids it (0 failures in 80 runs, against 6 in 40 with default capture) and still captures `print()`.
+- The GUI tests withdraw and destroy their Tk windows, but `destroy()` is skipped if an assert fails, so a shared fixture would still be useful. They also don't pass a `seed` yet.
 - `__pycache__/` folders are committed by mistake, and there is no `requirements.txt`, `.gitignore`, or `pytest.ini` yet.
 - `Image-Data/` exists locally but is empty and untracked.
 
@@ -50,13 +61,12 @@ An offline 3x3 challenge environment is being built by hand on the `story/Create
 
 In planned order:
 
-1. **Solvers** (`Library/solvers.py`): one contract, where a solver takes a `Challenge` and returns a list of tile indices. Baselines: `random`, `oracle` (returns `challenge.answer`, so it should pass 100%), and `noisy` (correct on each tile with probability p, so pass rate is roughly p^9). The trained CNN will plug in as another solver.
-2. **Benchmark** (`Library/benchmark.py`): `run_benchmark(env, solver, n)` reports pass rate and per-tile accuracy (optionally precision/recall from the `GradeResult` counts). Use a seeded env so solvers are compared on the same challenges. Its output feeds the README Results table.
-3. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
-4. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
-5. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>`, and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin.
-6. **Housekeeping**: `requirements.txt` (`pillow`, `pytest`), `.gitignore` (`__pycache__/`, `.venv/`, `.pytest_cache/`, `Image-Data/`, model weights), `git rm -r --cached` the committed `__pycache__` files, an optional `pytest.ini` (`pythonpath = .`, `testpaths = Unit-Tests`), then a PR to `main`.
-7. **Later**: a GUI option to highlight a solver's picks, for inspecting model mistakes.
+1. **Benchmark** (`Library/benchmark.py`): `run_benchmark(env, solver, n)` reports pass rate and per-tile accuracy (optionally precision/recall from the `GradeResult` counts). Use a seeded env so solvers are compared on the same challenges. Its output feeds the README Results table.
+2. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
+3. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
+4. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>`, and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin.
+5. **Housekeeping**: `requirements.txt` (`pillow`, `pytest`), `.gitignore` (`__pycache__/`, `.venv/`, `.pytest_cache/`, `Image-Data/`, model weights), `git rm -r --cached` the committed `__pycache__` files, an optional `pytest.ini` (`pythonpath = .`, `testpaths = Unit-Tests`), then a PR to `main`.
+6. **Later**: a CNN solver once the dataset and framework are chosen, and a GUI option to highlight a solver's picks, for inspecting model mistakes.
 
 Update the Current state and Roadmap sections as items land.
 
@@ -106,6 +116,7 @@ python -m pytest Unit-Tests
 - Tests are plain pytest classes (`class TestMain:` with bare `assert`), not `unittest.TestCase`.
 - pytest only collects methods whose names **start with** `test_` (`test_submit`, not `submit_test`).
 - GUI tests create a real `Tk()`: withdraw it immediately and destroy it even when an assert fails (fixture or `try`/`finally`).
+- A `TclError` about `init.tcl`, `tk.tcl`, `tcl_findLibrary`, or `couldn't read file` is the known flake (see Known issues): rerun, or use `--capture=sys`.
 - Prefer the real `CaptchaEnv(SyntheticTileSource(), seed=...)` over hand-made mocks. `load_challenge` needs real PIL tiles and a `prompt`.
 - Add tests for every new `Library/` module, and make sure the suite passes before committing.
 

@@ -18,6 +18,7 @@ import PIL
 from Library.gui import CaptchaApp
 from Library.captcha_env import CaptchaEnv, Challenge, GradeResult, NUM_TILES
 from Library.tile_sources import SyntheticTileSource, DEFAULT_CLASSES, TILE_SIZE
+from Library.solvers import Solver, OracleSolver, RandomSolver, NoisySolver, make_solver
 from main import main
 
 #############################################################
@@ -291,3 +292,86 @@ class TestCaptchaApp:
         app.toggle_tile_selection(0)
         assert 0 not in app.selected_tiles
         app.root.destroy()
+
+class TestSolver:
+    """
+    CLASS NAME: TestSolver
+
+    DESCRIPTION: This class contains unit tests for the solver functions.
+    """
+    def test_oracle_solver(self):
+        """
+        FUNCTION: test_oracle_solver
+
+        DESCRIPTION: This is the unit test for the OracleSolver class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        solver = OracleSolver()
+        challenge = Challenge(id="test", target="cat", tiles=["cat", "dog", "cat", "dog", "cat", "dog", "cat", "dog", "cat"], labels=["cat", "dog"])
+        selected_indices = solver.solve(challenge)
+        
+        # Check that the selected indices match the correct answer
+        assert selected_indices == challenge.answer
+
+    def test_random_solver(self):
+        """
+        FUNCTION: test_random_solver
+
+        DESCRIPTION: This is the unit test for the RandomSolver class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        solver = RandomSolver(seed=42)
+        challenge = Challenge(id="test", target="cat", tiles=["cat", "dog", "cat", "dog", "cat", "dog", "cat", "dog", "cat"], labels=["cat", "dog"])
+        selected_indices = solver.solve(challenge)
+        
+        # Check that the selected indices are a subset of the tile indices
+        assert all(index in range(NUM_TILES) for index in selected_indices)
+
+    def test_noisy_solver(self):
+        """
+        FUNCTION: test_noisy_solver
+
+        DESCRIPTION: This is the unit test for the NoisySolver class.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        solver = NoisySolver(p=0.5, seed=42)
+        challenge = Challenge(id="test", target="cat", tiles=["cat", "dog", "cat", "dog", "cat", "dog", "cat", "dog", "cat"], labels=["cat", "dog"])
+        selected_indices = solver.solve(challenge)
+        
+        # Check that the selected indices are a subset of the tile indices
+        assert all(index in range(NUM_TILES) for index in selected_indices)
+
+    def test_make_solver(self):
+        """
+        FUNCTION: test_solver_factory
+
+        DESCRIPTION: This is the unit test for the solver_factory function.
+
+        INPUTS: None
+
+        Outputs: None
+        """
+        oracle_solver = make_solver("oracle")
+        assert isinstance(oracle_solver, OracleSolver)
+
+        random_solver = make_solver("random", seed=42)
+        assert isinstance(random_solver, RandomSolver)
+
+        noisy_solver = make_solver("noisy", p=0.5, seed=42)
+        assert isinstance(noisy_solver, NoisySolver)
+
+        # Test for unknown solver name
+        try:
+            unknown_solver = make_solver("unknown")
+            assert False, "Expected ValueError for unknown solver name"
+        except ValueError:
+            pass
