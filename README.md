@@ -109,7 +109,7 @@ ECEN4273_Project2/
 3. Install the dependencies:
 
    ```bash
-   pip install pillow pytest
+   pip install -r requirements.txt
    ```
 
 ---

@@ -16,9 +16,9 @@ import PIL
 #   Files Import
 #############################################################
 from Library.gui import CaptchaApp
-from Library.captcha_env import CaptchaEnv, Challenge, GradeResult, NUM_TILES
+from Library.captcha_env import CaptchaEnv, Challenge, NUM_TILES
 from Library.tile_sources import SyntheticTileSource, DEFAULT_CLASSES, TILE_SIZE
-from Library.solvers import Solver, OracleSolver, RandomSolver, NoisySolver, make_solver
+from Library.solvers import OracleSolver, RandomSolver, NoisySolver, make_solver
 from main import main
 
 #############################################################

@@ -46,6 +46,8 @@ An offline 3x3 challenge environment is being built by hand on the `story/Create
 - `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI or solvers yet.
 - `Unit-Tests/unit_test.py`: 13 pytest tests covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), and the solvers (oracle, random, noisy, `make_solver`).
 - `.vscode/settings.json`: pytest discovery on `Unit-Tests`, using `.venv`.
+- `pytest.ini`: puts the repository root on the import path (`pythonpath = .`) so plain `pytest` works as well as `python -m pytest`, and sets `testpaths = Unit-Tests`. It does not change the capture mode.
+- `requirements.txt` and `.gitignore`: dependencies (`pillow`, `pytest`) and exclusions for caches, `.venv/`, `Image-Data/`, and model weights.
 
 ### Known issues
 
@@ -54,7 +56,6 @@ An offline 3x3 challenge environment is being built by hand on the `story/Create
   - It is not caused by the GUI code, Pillow, or Tk windows left open, and it doesn't happen outside pytest. A bare `Tk()` under pytest reproduces it, and repeated `CaptchaApp`s without pytest do not.
   - `python -m pytest Unit-Tests --capture=sys` avoids it (0 failures in 80 runs, against 6 in 40 with default capture) and still captures `print()`.
 - The GUI tests withdraw and destroy their Tk windows, but `destroy()` is skipped if an assert fails, so a shared fixture would still be useful. They also don't pass a `seed` yet.
-- `__pycache__/` folders are committed by mistake, and there is no `requirements.txt`, `.gitignore`, or `pytest.ini` yet.
 - `Image-Data/` exists locally but is empty and untracked.
 
 ## Roadmap
@@ -65,8 +66,7 @@ In planned order:
 2. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
 3. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
 4. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>`, and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin.
-5. **Housekeeping**: `requirements.txt` (`pillow`, `pytest`), `.gitignore` (`__pycache__/`, `.venv/`, `.pytest_cache/`, `Image-Data/`, model weights), `git rm -r --cached` the committed `__pycache__` files, an optional `pytest.ini` (`pythonpath = .`, `testpaths = Unit-Tests`), then a PR to `main`.
-6. **Later**: a CNN solver once the dataset and framework are chosen, and a GUI option to highlight a solver's picks, for inspecting model mistakes.
+5. **Later**: a CNN solver once the dataset and framework are chosen, and a GUI option to highlight a solver's picks, for inspecting model mistakes.
 
 Update the Current state and Roadmap sections as items land.
 
@@ -91,7 +91,7 @@ Python 3.10+ (the team uses 3.13 on Windows).
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 source .venv/bin/activate     # macOS / Linux
-pip install pillow pytest     # until requirements.txt exists
+pip install -r requirements.txt
 ```
 
 tkinter ships with the standard Windows Python installer. On Linux it may need a separate package (e.g. `python3-tk`).

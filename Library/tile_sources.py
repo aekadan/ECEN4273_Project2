@@ -15,8 +15,7 @@ import numbers
 import colorsys
 import random
 
-from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 #############################################################
 #   Files Import
