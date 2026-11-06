@@ -1,16 +1,59 @@
 
+#############################################################
+#   FILE NAME: test_dataset.py
+#
+#   DESCRIPTION: This file contains unit tests for the
+#   CAPTCHA image dataset loader. It verifies the dataset
+#   size, image dimensions, label formatting, reproducibility,
+#   multi-label classification, and background images.
+#
+#   Authors: Group 2
+#############################################################
+
+#############################################################
+#   Libraries
+#############################################################
+
 import torch
+
+#############################################################
+#   Files Import
+#############################################################
 
 from Library.dataset import SyntheticTileDataset
 
+#############################################################
+#   FUNCTIONS
+#############################################################
 
 def test_synthetic_dataset_length():
+    """
+    FUNCTION NAME: test_synthetic_dataset_length
+
+    DESCRIPTION: This function verifies that the synthetic
+    dataset contains the correct number of image samples.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
     dataset = SyntheticTileDataset(num_samples=12)
 
     assert len(dataset) == 12
 
 
 def test_synthetic_dataset_image_shape():
+    """
+    FUNCTION NAME: test_synthetic_dataset_image_shape
+
+    DESCRIPTION: This function verifies that the synthetic
+    images have the correct dimensions and data type for
+    the ResNet-18 model.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
     dataset = SyntheticTileDataset(num_samples=9)
 
     image, labels = dataset[0]
@@ -20,6 +63,17 @@ def test_synthetic_dataset_image_shape():
 
 
 def test_synthetic_dataset_label_shape():
+    """
+    FUNCTION NAME: test_synthetic_dataset_label_shape
+
+    DESCRIPTION: This function verifies that the label
+    tensor contains four class values and uses the correct
+    data type.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
     dataset = SyntheticTileDataset(num_samples=9)
 
     image, labels = dataset[0]
@@ -29,6 +83,17 @@ def test_synthetic_dataset_label_shape():
 
 
 def test_synthetic_dataset_labels():
+    """
+    FUNCTION NAME: test_synthetic_dataset_labels
+
+    DESCRIPTION: This function verifies that each synthetic
+    image is assigned the correct class label and that only
+    one class is active for each image.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
     dataset = SyntheticTileDataset(num_samples=9)
 
     for index in range(len(dataset)):
@@ -41,6 +106,17 @@ def test_synthetic_dataset_labels():
 
 
 def test_synthetic_dataset_reproducibility():
+    """
+    FUNCTION NAME: test_synthetic_dataset_reproducibility
+
+    DESCRIPTION: This function verifies that the same
+    synthetic image and labels are generated when using
+    the same dataset index and random seed.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
     dataset = SyntheticTileDataset(
         num_samples=9,
         seed=42
@@ -52,7 +128,19 @@ def test_synthetic_dataset_reproducibility():
     assert torch.equal(image1, image2)
     assert torch.equal(labels1, labels2)
 
+
 def test_multilabel_csv(tmp_path):
+    """
+    FUNCTION NAME: test_multilabel_csv
+
+    DESCRIPTION: This function verifies that the dataset
+    correctly reads multiple class labels from a CSV file
+    and assigns the correct values to the label tensor.
+
+    INPUTS: tmp_path
+
+    OUTPUTS: None
+    """
     from PIL import Image
     from Library.dataset import TileDataset
 
@@ -76,7 +164,19 @@ def test_multilabel_csv(tmp_path):
     assert image.shape == (3, 224, 224)
     assert labels.tolist() == [1.0, 1.0, 0.0, 0.0]
 
+
 def test_background_image_csv(tmp_path):
+    """
+    FUNCTION NAME: test_background_image_csv
+
+    DESCRIPTION: This function verifies that images without
+    any target classes are assigned a label tensor containing
+    only zeros when loaded from a CSV file.
+
+    INPUTS: tmp_path
+
+    OUTPUTS: None
+    """
     from PIL import Image
     from Library.dataset import TileDataset
 
