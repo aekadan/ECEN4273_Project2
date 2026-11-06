@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Test cache
+.pytest_cache/
+
+# Datasets
+Image-Data/
+
+# Model weights
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
