@@ -11,6 +11,7 @@ This project trains an image classification model to recognize the objects shown
 ## Table of Contents
 
 - [Project Overview](#project-overview)
+- [Project Status](#project-status)
 - [Repository Structure](#repository-structure)
 - [Getting Started](#getting-started)
 - [Dataset](#dataset)
@@ -40,14 +41,36 @@ Image CAPTCHAs ask a user to find every tile in a grid that contains a target ob
 
 ---
 
+## Project Status
+
+All challenges are generated and graded locally, with no connection to any real CAPTCHA service.
+
+| Component | Status |
+|-----------|--------|
+| Offline 3x3 challenge generator and grader | Done |
+| Synthetic placeholder tiles | Done |
+| Tkinter window for playing challenges by hand | Done |
+| Baseline solvers (oracle, random, noisy) | Done |
+| Benchmark runner for measuring pass rates | Planned |
+| Tile source for real images | Planned |
+| Command-line options in `main.py` | Planned |
+| Dataset, model, and training | Not started |
+
+---
+
 ## Repository Structure
 
 ```
 ECEN4273_Project2/
-├── Image-Data/     # Training, validation, and test images
-├── Library/        # Project modules (data loading, model, training, inference)
-├── Unit-Tests/     # Unit tests for the project modules
-├── main.py         # Entry point for the project
+├── Image-Data/             # Training, validation, and test images (empty for now)
+├── Library/                # Project package
+│   ├── __init__.py
+│   ├── captcha_env.py      # Challenge generator and grader
+│   ├── gui.py              # Tkinter window for playing challenges by hand
+│   ├── solvers.py          # Baseline solvers and make_solver
+│   └── tile_sources.py     # Tile image sources (synthetic placeholder tiles for now)
+├── Unit-Tests/             # Unit tests for the project modules
+├── main.py                 # Entry point for the project (no commands yet)
 └── README.md
 ```
 
@@ -59,6 +82,7 @@ ECEN4273_Project2/
 
 - Python 3.10+
 - pip
+- tkinter, for the GUI (included with the standard Windows installer; on Linux it may need a separate package such as `python3-tk`)
 - (Optional) A CUDA-capable GPU for faster training
 
 ### Installation
@@ -92,7 +116,9 @@ ECEN4273_Project2/
 
 ## Dataset
 
-Place the image data in `Image-Data/` using one subfolder per class:
+No dataset has been chosen yet, and the code can't read real images yet. For now, challenges use synthetic placeholder tiles (a solid color with the class name drawn on) for four classes: `bus`, `bicycle`, `traffic_light`, and `hydrant`.
+
+Once the real-image tile source is built, the image data will go in `Image-Data/` using one subfolder per class:
 
 ```
 Image-Data/
@@ -132,13 +158,45 @@ Image-Data/
 
 ## Usage
 
-Run the project from the repository root:
+`main.py` has no commands yet, so for now the project is used from Python. Run everything from the repository root, since `Library` is imported as a package.
 
-```bash
-python main.py
+### Play challenges by hand
+
+```python
+from Library.captcha_env import CaptchaEnv
+from Library.gui import CaptchaApp
+from Library.tile_sources import SyntheticTileSource
+
+env = CaptchaEnv(SyntheticTileSource())
+CaptchaApp(env).run()
 ```
 
-_Add the command-line options for training, evaluation, and inference here as they are built._
+Click tiles to select them, press **Submit** to grade your selection, and press **Next** for a new challenge. The window keeps a running score.
+
+### Run a solver
+
+```python
+from Library.captcha_env import CaptchaEnv
+from Library.solvers import make_solver
+from Library.tile_sources import SyntheticTileSource
+
+env = CaptchaEnv(SyntheticTileSource(), seed=1)
+solver = make_solver("noisy", seed=1, p=0.9)
+
+challenge = env.new_challenge()
+result = env.grade(challenge, solver.solve(challenge))
+print(result.passed, result.tiles_correct)
+```
+
+A challenge passes only if all 9 tiles are right. These baselines set the reference points for the trained model:
+
+| Solver | Behavior | Expected pass rate |
+|--------|----------|--------------------|
+| `oracle` | Returns the correct answer | 100% |
+| `random` | Selects each tile on a coin flip | About 0.2% (1/512) |
+| `noisy` | Gets each tile right with probability `p` | About `p`^9 (39% at `p=0.9`) |
+
+_Add the command-line options for benchmarking, training, evaluation, and inference here as they are built._
 
 ---
 
@@ -150,9 +208,17 @@ Unit tests are in `Unit-Tests/`. To run them:
 python -m pytest Unit-Tests
 ```
 
+**Known issue on Windows:** the GUI tests sometimes fail with a `TclError` such as `Can't find a usable init.tcl`. This comes from a clash between pytest's default output capture and Tcl, and it only affects test runs, not the application. Rerun the tests when it happens, or avoid it with:
+
+```bash
+python -m pytest Unit-Tests --capture=sys
+```
+
 ---
 
 ## Results
+
+No model has been trained yet, so these are still to be measured.
 
 | Metric                      | Value |
 |-----------------------------|-------|
@@ -171,6 +237,6 @@ _Add training curves, confusion matrices, and a discussion of the results here._
 
 | Name |
 |------|
-| Zane Franics |
+| Zane Francis |
 | Erica Saenz |
 | Aek Nithianandan |
