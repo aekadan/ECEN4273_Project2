@@ -1,0 +1,336 @@
+' ===========================================================================
+'  FILE NAME: system-architecture.puml
+'
+'  DESCRIPTION: System architecture of ECEN 4273 Project 2, an offline,
+'  academic-only 3x3 reCAPTCHA-style image challenge solver. The file holds
+'  four diagrams:
+'    1. Component diagram: modules, data stores, and who calls whom
+'    2. Class diagram: the main classes and their contracts
+'    3. Sequence diagram: one benchmark run with the planned CNN solver
+'    4. Activity diagram: the training and evaluation pipeline
+'
+'  Elements marked <<planned>> (dashed) do not exist on main yet
+'  (state of main at PR #3, 2026-11-11).
+'
+'  Render: plantuml system-architecture.puml   (one PNG per diagram)
+'          or paste one @startuml ... @enduml block into plantuml.com
+'
+'  Authors: Group 2
+' ===========================================================================
+ 
+@startuml component-architecture
+title ECEN 4273 Project 2: Component Architecture (offline only)
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam rectangle {
+  BackgroundColor<<planned>> #FFFFFF
+  BorderStyle<<planned>> dashed
+}
+skinparam component {
+  BackgroundColor<<planned>> #FFFFFF
+  BorderStyle<<planned>> dashed
+}
+ 
+actor "Student / grader" as User
+ 
+component "main.py\n(command line: play, bench,\n--seed, --data)" as Main <<planned>>
+ 
+package "Library (Python package)" {
+ 
+  package "Evaluation side (done)" {
+    component "gui.py\nCaptchaApp" as GUI
+    component "benchmark.py\nrun_benchmark()\ncompare_solvers()" as Bench
+    component "captcha_env.py\nCaptchaEnv, Challenge,\nGradeResult" as Env
+    component "solvers.py\nOracle, Random, Noisy\nmake_solver()" as Solvers
+    component "tile_sources.py\nSyntheticTileSource" as Tiles
+    component "FolderTileSource" as FolderSrc <<planned>>
+    component "ModelSolver" as ModelSolver <<planned>>
+  }
+ 
+  package "Training side (in progress)" {
+    component "dataset.py\nTileDataset\nSyntheticTileDataset\nget_transform()" as Dataset
+    component "model.py\ncreate_model() ResNet-18\npredict() sigmoid" as Model #E3EEFB
+    component "train.py\nBCEWithLogits, AdamW,\nbf16 autocast on CUDA" as Train <<planned>>
+    component "thresholds\nper-class, tuned on val\nfor pass rate" as Thresh <<planned>>
+  }
+}
+ 
+folder "Image-Data/\n(not chosen yet,\nnot committed)" as Data <<planned>> {
+  folder "train/<class>/" as DTrain
+  folder "val/<class>/" as DVal
+  folder "test/<class>/" as DTest
+}
+ 
+database "Checkpoint (.pt)\nweights + class list\n+ thresholds\n(gitignored)" as Ckpt <<planned>>
+ 
+User --> GUI : plays challenges by hand
+User --> Main : runs commands
+Main --> GUI : play
+Main --> Bench : bench --solver <name> -n <count>
+Main --> Train : train (later)
+ 
+GUI --> Env : new_challenge(), grade(selection)
+Bench --> Env : new_challenge(), grade(selection)
+Bench --> Solvers : solve(challenge) -> list[int]
+Solvers ..> ModelSolver : make_solver("model")
+Env --> Tiles : get_tile(label, rng)
+Env ..> FolderSrc : get_tile(label, rng)
+ 
+ModelSolver ..> Model : predict(9 tiles)
+ModelSolver ..> Ckpt : loads
+ModelSolver ..> Thresh : target-class threshold
+ 
+Train ..> Dataset : DataLoader batches
+Train ..> Model : create_model(N), fit
+Train ..> Ckpt : saves
+Thresh ..> Ckpt : stored in
+Dataset --> Tiles : SyntheticTileDataset uses
+ 
+Dataset ..> DTrain : reads
+Dataset ..> DVal : reads
+FolderSrc ..> DTest : reads (benchmark on test only)
+ 
+note bottom of Env
+  A challenge passes only with
+  zero false positives and
+  zero false negatives.
+end note
+ 
+note right of ModelSolver
+  May read only challenge.tiles
+  and challenge.target, never
+  answer or labels.
+end note
+ 
+legend right
+  Solid = on main today
+  Dashed / <<planned>> = not built yet
+  Blue = the CNN
+  No component talks to a network
+  or a live CAPTCHA service.
+endlegend
+@enduml
+ 
+@startuml class-diagram
+title ECEN 4273 Project 2: Main Classes and Contracts
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam classAttributeIconSize 0
+skinparam class {
+  BackgroundColor<<planned>> #FFFFFF
+  BorderStyle<<planned>> dashed
+}
+hide empty members
+ 
+package "captcha_env.py" {
+  class Challenge <<dataclass>> {
+    + id : str
+    + target : str
+    + tiles : list[PIL.Image]
+    + labels : list[str]
+    + sources : list[str]
+    --
+    + answer : list[int] <<property>>
+    + prompt : str <<property>>
+  }
+  class GradeResult <<dataclass>> {
+    + passed : bool
+    + true_positives : int
+    + false_positives : int
+    + false_negatives : int
+    + true_negatives : int
+    --
+    + tiles_correct : int <<property>>
+  }
+  class CaptchaEnv {
+    + source : TileSource
+    + min_targets : int = 2
+    + max_targets : int = 5
+    + seed : int
+    + rng : random.Random
+    --
+    + new_challenge() : Challenge
+    + grade(challenge, selection : list[int]) : GradeResult
+  }
+}
+ 
+package "tile_sources.py" {
+  interface TileSource <<protocol>> {
+    + classes : list[str]
+    + get_tile(label : str, rng) : PIL.Image
+  }
+  class SyntheticTileSource {
+    + classes = DEFAULT_CLASSES
+    + size = TILE_SIZE (100)
+    + get_tile(label, rng) : PIL.Image
+  }
+  class FolderTileSource <<planned>> {
+    + root : Image-Data/<split>
+    + classes : from folder names
+    + get_tile(label, rng) : PIL.Image
+  }
+}
+ 
+package "solvers.py" {
+  abstract class Solver {
+    + name : str
+    + rng : random.Random
+    + {abstract} solve(challenge) : list[int]
+  }
+  class OracleSolver
+  class RandomSolver
+  class NoisySolver {
+    + p : float
+  }
+  class ModelSolver <<planned>> {
+    + model : ResNet-18
+    + classes : list[str]
+    + thresholds : dict[str, float]
+    + device : str
+    + solve(challenge) : list[int]
+  }
+}
+ 
+package "benchmark.py" {
+  class BenchmarkResult <<dataclass>> {
+    + solver_name : str
+    + n : int
+    + passes : int
+    + tp, fp, fn, tn : int
+    + seconds_per_challenge : float
+    --
+    + pass_rate <<property>>
+    + tile_accuracy <<property>>
+    + precision <<property>>
+    + recall <<property>>
+  }
+  class "benchmark (functions)" as BenchFns <<module>> {
+    + run_benchmark(env, solver, n) : BenchmarkResult
+    + compare_solvers(source, solvers, n, seed) : list[BenchmarkResult]
+  }
+}
+ 
+package "gui.py" {
+  class CaptchaApp {
+    + env : CaptchaEnv
+    + challenge : Challenge
+    + selected_tiles : set[int]
+    + score_attempts : int
+    + score_correct : int
+    --
+    + load_challenge()
+    + toggle_tile_selection(i)
+    + submit() : GradeResult
+    + run()
+  }
+}
+ 
+package "dataset.py" {
+  class TileDataset <<torch Dataset>> {
+    + data_dir : str
+    + classes : list[str]
+    + samples : list[(path, labels)]
+    + __getitem__(i) : (image 3x224x224, multi-hot labels)
+  }
+  class SyntheticTileDataset <<torch Dataset>> {
+    + num_samples : int
+    + seed : int
+    + __getitem__(i) : (image, one-hot labels)
+  }
+}
+ 
+package "model.py" {
+  class "model (functions)" as ModelFns <<module>> {
+    + create_model(num_classes, pretrained) : ResNet-18
+    + predict(model, images, device) : sigmoid probs
+  }
+}
+ 
+TileSource <|.. SyntheticTileSource
+TileSource <|.. FolderTileSource
+Solver <|-- OracleSolver
+Solver <|-- RandomSolver
+Solver <|-- NoisySolver
+Solver <|-- ModelSolver
+ 
+CaptchaEnv o-- TileSource : source
+CaptchaEnv ..> Challenge : creates
+CaptchaEnv ..> GradeResult : returns
+CaptchaApp --> CaptchaEnv
+BenchFns ..> CaptchaEnv
+BenchFns ..> Solver
+BenchFns ..> BenchmarkResult : returns
+Solver ..> Challenge : reads
+ModelSolver ..> ModelFns : predict
+SyntheticTileDataset --> SyntheticTileSource
+@enduml
+ 
+@startuml benchmark-sequence
+title One benchmark run with the planned ModelSolver
+skinparam shadowing false
+skinparam defaultFontName Arial
+ 
+actor User
+participant "main.py\nbench" as Main
+participant "compare_solvers /\nrun_benchmark" as Bench
+participant "CaptchaEnv" as Env
+participant "TileSource" as Src
+participant "ModelSolver" as MS
+participant "ResNet-18\n(model.py)" as Net
+ 
+User -> Main : bench --solver model -n 2000 --seed 1
+Main -> Bench : run_benchmark(env, solver, n)
+loop n challenges
+  Bench -> Env : new_challenge()
+  Env -> Env : pick target, 2-5 target tiles
+  loop 9 tiles
+    Env -> Src : get_tile(label, rng)
+    Src --> Env : PIL image
+  end
+  Env --> Bench : Challenge(tiles, target, labels)
+  Bench -> MS : solve(challenge)
+  note right of MS : uses only tiles + target
+  MS -> MS : get_transform() each tile,\nstack into 9x3x224x224
+  MS -> Net : predict(batch)
+  Net --> MS : 9 x N sigmoid probabilities
+  MS -> MS : keep tiles where\np[target] >= threshold[target]
+  MS --> Bench : selection (sorted list of ints 0-8)
+  Bench -> Env : grade(challenge, selection)
+  Env --> Bench : GradeResult (passed, TP, FP, FN, TN)
+  Bench -> Bench : add counts
+end
+Bench --> Main : BenchmarkResult
+Main --> User : pass rate, tile accuracy,\nprecision, recall
+@enduml
+ 
+@startuml pipeline-activity
+title Training and evaluation pipeline
+skinparam shadowing false
+skinparam defaultFontName Arial
+ 
+start
+:Choose a public tile dataset\n(licence allows academic use);
+:Lay out Image-Data/train, val, test\n(one folder per class, or labels.csv);
+partition "Train (train.py, planned)" {
+  :TileDataset(train) + augmentation\n-> DataLoader (batch 128, bf16 on CUDA);
+  :create_model(N classes)\nResNet-18, ImageNet weights;
+  repeat
+    :train one epoch\n(BCEWithLogitsLoss, AdamW);
+    :validate on val split;
+  repeat while (val loss still improving?) is (yes)
+  ->no;
+  :save checkpoint\n(weights + class list);
+}
+partition "Thresholds (planned)" {
+  :sweep per-class thresholds on val;
+  :keep thresholds that maximise\nfull-challenge pass rate;
+}
+partition "Evaluate (benchmark.py)" {
+  :FolderTileSource(test) -> CaptchaEnv(seed);
+  :compare_solvers: oracle, random,\nnoisy, model on the same challenges;
+}
+:Fill README Results table;
+stop
+@enduml
+ 

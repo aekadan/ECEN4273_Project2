@@ -52,9 +52,13 @@ All challenges are generated and graded locally, with no connection to any real 
 | Tkinter window for playing challenges by hand | Done |
 | Baseline solvers (oracle, random, noisy) | Done |
 | Benchmark runner for measuring pass rates | Done |
+| Dataset loader (`TileDataset`, `SyntheticTileDataset`) | Done |
+| ResNet-18 model factory and `predict` | Done |
+| Training loop (`train.py`) | Planned |
+| Model solver and per-class thresholds | Planned |
 | Tile source for real images | Planned |
 | Command-line options in `main.py` | Planned |
-| Dataset, model, and training | Not started |
+| Real image dataset | Not chosen |
 
 ---
 
@@ -67,11 +71,17 @@ ECEN4273_Project2/
 │   ├── __init__.py
 │   ├── benchmark.py        # Runs solvers over many challenges and scores them
 │   ├── captcha_env.py      # Challenge generator and grader
+│   ├── dataset.py          # PyTorch datasets: image folders, labels.csv, synthetic tiles
 │   ├── gui.py              # Tkinter window for playing challenges by hand
+│   ├── model.py            # ResNet-18 classifier (create_model, predict)
 │   ├── solvers.py          # Baseline solvers and make_solver
 │   └── tile_sources.py     # Tile image sources (synthetic placeholder tiles for now)
-├── Unit-Tests/             # Unit tests for the project modules
+├── Unit-Tests/             # Unit tests
+│   ├── unit_test.py        # Environment, tile sources, GUI, solvers, benchmark
+│   └── test_dataset.py     # Dataset loader
 ├── main.py                 # Entry point for the project (no commands yet)
+├── pytest.ini              # Test discovery settings
+├── requirements.txt
 └── README.md
 ```
 
@@ -84,7 +94,8 @@ ECEN4273_Project2/
 - Python 3.10+
 - pip
 - tkinter, for the GUI (included with the standard Windows installer; on Linux it may need a separate package such as `python3-tk`)
-- (Optional) A CUDA-capable GPU for faster training
+- PyTorch and torchvision (installed by `requirements.txt`)
+- (Optional) An NVIDIA GPU with CUDA for faster training. The team's reference card is an RTX 4060 (8 GB).
 
 ### Installation
 
@@ -113,13 +124,22 @@ ECEN4273_Project2/
    pip install -r requirements.txt
    ```
 
+   On Windows, `pip` installs the CPU-only build of PyTorch. To train on an NVIDIA GPU, install the CUDA build first, then the requirements:
+
+   ```bash
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+   pip install -r requirements.txt
+   ```
+
+   Check it with `python -c "import torch; print(torch.cuda.is_available())"`.
+
 ---
 
 ## Dataset
 
-No dataset has been chosen yet, and the code can't read real images yet. For now, challenges use synthetic placeholder tiles (a solid color with the class name drawn on) for four classes: `bus`, `bicycle`, `traffic_light`, and `hydrant`.
+No dataset has been chosen yet. For now, challenges and `SyntheticTileDataset` use synthetic placeholder tiles (a solid color with the class name drawn on) for four classes: `bus`, `bicycle`, `traffic_light`, and `hydrant`. These tiles are for testing the code only: a model can tell them apart by color alone, so results on them say nothing about real images.
 
-Once the real-image tile source is built, the image data will go in `Image-Data/` using one subfolder per class:
+`TileDataset` (in `Library/dataset.py`) already reads real images in either of two layouts. Image data goes in `Image-Data/`, which is not committed, with one subfolder per split:
 
 ```
 Image-Data/
@@ -133,6 +153,16 @@ Image-Data/
 ├── val/
 └── test/
 ```
+
+For tiles that show several classes, or none of them (background tiles), put a `labels.csv` in the split folder instead, with `;` between labels:
+
+```
+filename,labels
+img_001.jpg,bus;traffic_light
+img_002.jpg,
+```
+
+Train on `train/`, tune on `val/`, and benchmark only on `test/`.
 
 | Item          | Details |
 |---------------|---------|
@@ -148,12 +178,28 @@ Image-Data/
 
 | Item            | Details |
 |-----------------|---------|
-| Architecture    | _TBD_ (e.g. custom CNN or fine-tuned ResNet / EfficientNet) |
-| Framework       | _TBD_ (e.g. PyTorch or TensorFlow) |
-| Input size      | _TBD_   |
-| Loss function   | _TBD_ (e.g. cross-entropy) |
-| Optimizer       | _TBD_ (e.g. Adam) |
-| Augmentation    | _TBD_ (e.g. flips, rotations, color jitter) |
+| Architecture    | ResNet-18 pretrained on ImageNet, with a new linear head (one output per class) |
+| Framework       | PyTorch + torchvision |
+| Input size      | 224x224 RGB, ImageNet mean/std normalization |
+| Output          | Sigmoid probability per class (multi-label) |
+| Selection       | Tiles whose probability for the target class is at or above a per-class threshold tuned on `val/` (planned) |
+| Loss function   | Binary cross-entropy with logits (planned) |
+| Optimizer       | AdamW with a cosine schedule (planned) |
+| Training setup  | CUDA if available, bf16 mixed precision, batch 128 (64 if out of memory), `--device cpu` fallback (planned) |
+| Augmentation    | Random resized crop, horizontal flip, color jitter on training images only (planned) |
+
+```python
+from Library.dataset import SyntheticTileDataset
+from Library.model import create_model, predict
+from torch.utils.data import DataLoader
+
+dataset = SyntheticTileDataset(num_samples=8)
+model = create_model(num_classes=len(dataset.classes))
+images, labels = next(iter(DataLoader(dataset, batch_size=8)))
+probs = predict(model, images)  # shape (8, 4), untrained
+```
+
+Always build the model with `num_classes=len(dataset.classes)`, so the head matches the dataset's classes and their order.
 
 ---
 
@@ -234,7 +280,7 @@ _Add the command-line options for benchmarking, training, evaluation, and infere
 
 ## Testing
 
-Unit tests are in `Unit-Tests/`. To run them:
+Unit tests are in `Unit-Tests/`: `unit_test.py` covers the environment, tile sources, GUI, solvers, and benchmark, and `test_dataset.py` covers the dataset loader (it needs PyTorch installed). To run them:
 
 ```bash
 python -m pytest Unit-Tests
@@ -250,7 +296,7 @@ python -m pytest Unit-Tests --capture=sys
 
 ## Results
 
-No model has been trained yet, so these are still to be measured.
+No model has been trained yet, so these are still to be measured. Results will be reported on the `test/` split of a real dataset, next to the oracle, random, and noisy baselines on the same seed.
 
 | Metric                      | Value |
 |-----------------------------|-------|
@@ -271,4 +317,4 @@ _Add training curves, confusion matrices, and a discussion of the results here._
 |------|
 | Zane Francis |
 | Erica Saenz |
-| Aek Nithianandan |
+| Aek Nithianandan |

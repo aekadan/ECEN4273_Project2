@@ -1,2 +1,9 @@
 pillow>=12.1,<14
 pytest>=9.2,<10
+
+# PyTorch, used by Library/dataset.py and Library/model.py.
+# This installs the CPU build from PyPI on Windows. For NVIDIA GPU training,
+# install the CUDA build first, then run pip install -r requirements.txt:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+torch>=2.6
+torchvision>=0.21

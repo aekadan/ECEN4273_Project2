@@ -17,7 +17,7 @@ Planned pipeline (see README.md):
 
 ## Current state
 
-The offline 3x3 challenge environment, GUI, and baseline solvers were built by hand and merged into `main` (PR #1, from `story/Create-Recaptcha-Environment`). They replace the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. The benchmark is on `story/Implement-Benchmark-Test`. No dataset, model, or training code exists yet, and the framework is undecided (PyTorch with a pretrained ResNet has been suggested). The README's Dataset, Model, and Results tables are still _TBD_.
+The offline 3x3 challenge environment, GUI, and baseline solvers were built by hand and merged into `main` (PR #1, from `story/Create-Recaptcha-Environment`). They replace the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. The dataset loader landed in PR #2 (`feature/ai-dataset-erica`) and the benchmark in PR #3 (`story/Implement-Benchmark-Test`). The framework is PyTorch with a pretrained ResNet-18 (`Library/model.py`), but there is no training loop, no model solver, and no real dataset yet, so the README's Results table is still _TBD_. The planned training setup targets an NVIDIA RTX 4060 (8 GB): CUDA when available, bf16 autocast, batch 128 (64 if it runs out of memory), and a `--device cpu` fallback for teammates without a GPU.
 
 ### Done
 
@@ -48,11 +48,18 @@ The offline 3x3 challenge environment, GUI, and baseline solvers were built by h
   - `run_benchmark(env, solver, n)`: calls `new_challenge`, `solve`, then `grade` `n` times and returns a `BenchmarkResult`. Raises `ValueError` unless `n` is a positive int (`bool` is rejected). It does not catch `grade`'s errors, so a bad solver selection fails loudly.
   - `compare_solvers(source, solvers, n, seed)`: builds a **fresh** `CaptchaEnv(source, seed=seed)` for each solver so every solver sees the same challenges, and returns a list of results in the same order as `solvers`. Solvers keep their own `rng` state between calls, so pass freshly built solvers for reproducible comparisons.
   - Measured with `seed=1`, `n=2000`: oracle passes 100%; random 0.1% pass, 0.50 tile accuracy; noisy `p=0.9` 38.1% pass, 0.90 tile accuracy.
+- `Library/dataset.py`: PyTorch datasets for training.
+  - `get_transform()`: resize to 224x224, `ToTensor`, ImageNet mean/std normalization. Train and eval use the same transform (no augmentation yet).
+  - `TileDataset(data_dir, classes=None)`: if `data_dir/labels.csv` exists, reads `filename,labels` rows with `;`-separated labels (multi-label tiles and empty-label background tiles are allowed); otherwise reads one subfolder per class (`.png`, `.jpg`, `.jpeg`, one label each). `classes` defaults to the sorted folder names or CSV labels, and unknown classes raise `ValueError`. `__getitem__` returns `(3x224x224 float tensor, multi-hot float label vector)`.
+  - `SyntheticTileDataset(num_samples=100, seed=42)`: wraps `SyntheticTileSource`; sample `i` has class `classes[i % len(classes)]` and uses `random.Random(seed + i)`, so it is deterministic.
+  - It imports `from Library.tile_sources import ...` (absolute), unlike the relative-import convention below.
+- `Library/model.py`: `create_model(num_classes=8, pretrained=True)` loads torchvision ResNet-18 (ImageNet weights) and replaces `fc` with an `N`-way linear head; `predict(model, images, device="cpu")` moves the model to `device`, switches to eval, and returns sigmoid probabilities (multi-label, one independent probability per class). Always pass `num_classes=len(dataset.classes)`; the default of 8 does not match the 4 synthetic classes. The file has no banner header or docstrings yet.
 - `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI, solvers, or benchmark yet.
-- `Unit-Tests/unit_test.py`: 28 pytest tests (counting each parametrized case) covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), the solvers (oracle, random, noisy, `make_solver`), and the benchmark (`TestBenchmark`: exact oracle and always-wrong scores, counts covering every tile, determinism, invalid `n`, the precision guard via an `EmptySolver` helper, and `compare_solvers` order and fairness). All tests live in this one file, with one test class per module.
+- `Unit-Tests/unit_test.py`: 28 pytest tests (counting each parametrized case) covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), the solvers (oracle, random, noisy, `make_solver`), and the benchmark (`TestBenchmark`: exact oracle and always-wrong scores, counts covering every tile, determinism, invalid `n`, the precision guard via an `EmptySolver` helper, and `compare_solvers` order and fairness). It uses one test class per module.
+- `Unit-Tests/test_dataset.py`: 7 tests for `dataset.py` (synthetic length, image shape, label shape and one-hot labels, reproducibility, multi-label CSV, background-image CSV). They are plain functions rather than a test class, and need `torch` installed.
 - `.vscode/settings.json`: pytest discovery on `Unit-Tests`, using `.venv`.
 - `pytest.ini`: puts the repository root on the import path (`pythonpath = .`) so plain `pytest` works as well as `python -m pytest`, and sets `testpaths = Unit-Tests`. It does not change the capture mode.
-- `requirements.txt` and `.gitignore`: dependencies (`pillow`, `pytest`) and exclusions for caches, `.venv/`, `Image-Data/`, and model weights.
+- `requirements.txt` and `.gitignore`: dependencies (`pillow`, `pytest`, `torch`, `torchvision`) and exclusions for caches, `.venv/`, `Image-Data/`, and model weights.
 
 ### Known issues
 
@@ -61,7 +68,10 @@ The offline 3x3 challenge environment, GUI, and baseline solvers were built by h
   - It is not caused by the GUI code, Pillow, or Tk windows left open, and it doesn't happen outside pytest. A bare `Tk()` under pytest reproduces it, and repeated `CaptchaApp`s without pytest do not.
   - `python -m pytest Unit-Tests --capture=sys` avoids it (0 failures in 80 runs, against 6 in 40 with default capture) and still captures `print()`.
 - The GUI tests withdraw and destroy their Tk windows, but `destroy()` is skipped if an assert fails, so a shared fixture would still be useful. They also don't pass a `seed` yet.
-- `Image-Data/` exists locally but is empty and untracked.
+- `Image-Data/` exists locally but is empty and untracked. No real dataset has been chosen.
+- Synthetic tiles are a class color with the class name drawn on, so a model learns them from color alone. Use them for wiring and tests only, never as reported results.
+- Some `__pycache__/*.pyc` files are tracked despite `.gitignore` (`git rm --cached` them).
+- The `origin/story/AI-model` remote branch (with a literal `origin/` prefix) is old and behind `main`.
 
 ## Roadmap
 
@@ -70,7 +80,10 @@ In planned order:
 1. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. Like `SyntheticTileSource`, it must keep no random state of its own and use only the `rng` passed to `get_tile`, so `compare_solvers` can share one source across envs. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
 2. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
 3. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>` (a thin wrapper over `run_benchmark`/`compare_solvers` that prints the `BenchmarkResult` rates), and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin. Its benchmark output feeds the README Results table.
-4. **Later**: a CNN solver once the dataset and framework are chosen, and a GUI option to highlight a solver's picks, for inspecting model mistakes.
+4. **`train.py`** in `Library/`: `BCEWithLogitsLoss`, AdamW, a short cosine schedule, train-only augmentation (random resized crop, flip, color jitter), CUDA if available with bf16 autocast, batch 128, pinned-memory `DataLoader` with `num_workers=4` behind a `__main__` guard (Windows), and a `--device` override. Save a checkpoint (gitignored) holding the weights **and the class list**, and check the class list on load. Prove the loop on `SyntheticTileDataset` first.
+5. **`ModelSolver`** in `solvers.py` (and `make_solver("model")`): batch the 9 tiles through `get_transform()` and `predict`, and return the sorted indices whose probability for `challenge.target` is at or above that class's threshold. It may read only `tiles` and `target`.
+6. **Thresholds**: sweep per-class thresholds on the val split to maximize full-challenge pass rate (not tile accuracy, since pass rate is roughly tile accuracy to the 9th power), and store them with the checkpoint.
+7. **Later**: fill the README Results table (oracle, random, noisy, and model on the same seed and test split), and a GUI option to highlight a solver's picks, for inspecting model mistakes.
 
 Update the Current state and Roadmap sections as items land.
 
@@ -80,12 +93,14 @@ Update the Current state and Roadmap sections as items land.
 ECEN4273_Project2/
 ├── Image-Data/     # train/ val/ test/, one subfolder per class (bicycle/, bus/, traffic_light/, ...)
 ├── Library/        # package: environment, tile sources, GUI, solvers, benchmark, model, training
-├── Unit-Tests/     # pytest tests, currently all in unit_test.py (one Test class per module)
+├── Unit-Tests/     # pytest tests: unit_test.py (one Test class per module) and test_dataset.py
 ├── main.py         # command-line entry point
 └── README.md
 ```
 
 Put reusable code in `Library/` and keep `main.py` a thin command-line layer over it. Large datasets and model weights should not be committed.
+
+Design references: the architecture is drawn in `architecture/system-architecture.puml` (PlantUML) and `architecture/system-architecture.uxf` (UMLet) in the project files, not in the repo.
 
 ## Setup
 
@@ -97,6 +112,8 @@ python -m venv .venv
 source .venv/bin/activate     # macOS / Linux
 pip install -r requirements.txt
 ```
+
+For GPU training, install the CUDA build of PyTorch before the requirements: `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128`. The plain PyPI wheel on Windows is CPU-only.
 
 tkinter ships with the standard Windows Python installer. On Linux it may need a separate package (e.g. `python3-tk`).
 
@@ -162,4 +179,4 @@ Match the existing file style:
 
 ## Git
 
-The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`. Current work is on `story/Implement-Benchmark-Test`.
+The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`. PRs #1 (environment), #2 (dataset loader), and #3 (benchmark) are merged into `main`.
