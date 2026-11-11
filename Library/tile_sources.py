@@ -104,7 +104,36 @@ class SyntheticTileSource:
         ImageDraw.Draw(tile).text((10, 10), label.replace("_", " "), fill=(255, 255, 255))
         return tile
 
-    
+
+class FolderTileSource:
+    """
+    CLASS NAME: FolderTileSource
+
+    DESCRIPTION: This class represents a folder tile source, which loads
+    tile images from a specified folder.
+
+    INPUTS: folder_path, classes, size
+
+    OUTPUTS: None
+    """
+    def __init__(self, folder_path, classes=None, size=TILE_SIZE):
+        """
+        FUNCTION NAME: __init__
+
+        DESCRIPTION: This is the constructor for the FolderTileSource class.
+
+        INPUTS: folder_path, classes, size
+
+        OUTPUTS: None
+        """
+        self.folder_path = folder_path
+        if classes is None:
+            classes = DEFAULT_CLASSES
+        self.classes = list(classes)
+        self.size = size
+        self.tiles = {}
+
+        
 #############################################################
 #   FUNCTIONS
 #############################################################
