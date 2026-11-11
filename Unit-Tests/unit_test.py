@@ -11,6 +11,7 @@
 #############################################################
 import random
 import PIL
+import pytest
 
 #############################################################
 #   Files Import
@@ -18,7 +19,8 @@ import PIL
 from Library.gui import CaptchaApp
 from Library.captcha_env import CaptchaEnv, Challenge, NUM_TILES
 from Library.tile_sources import SyntheticTileSource, DEFAULT_CLASSES, TILE_SIZE
-from Library.solvers import OracleSolver, RandomSolver, NoisySolver, make_solver
+from Library.solvers import Solver, OracleSolver, RandomSolver, NoisySolver, make_solver
+from Library.benchmark import run_benchmark, BenchmarkResult, compare_solvers
 from main import main
 
 #############################################################
@@ -375,3 +377,273 @@ class TestSolver:
             assert False, "Expected ValueError for unknown solver name"
         except ValueError:
             pass
+
+class EmptySolver(Solver):
+    """
+    CLASS NAME: EmptySolver
+
+    DESCRIPTION: This test helper never selects a tile. It is used to
+    check the precision guard when the solver selects nothing.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
+    def __init__(self):
+        """
+        FUNCTION NAME: __init__
+
+        DESCRIPTION: This sets the solver's name.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        super().__init__("empty")
+
+    def solve(self, challenge):
+        """
+        FUNCTION NAME: solve
+
+        DESCRIPTION: This returns an empty selection for every challenge.
+
+        INPUTS: challenge (Challenge)
+
+        OUTPUTS: empty list
+        """
+        return []
+
+class TestBenchmark:
+    """
+    CLASS NAME: TestBenchmark
+
+    DESCRIPTION: This class contains unit tests for the benchmark functions.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
+    SEED = 42
+
+    def make_env(self):
+        """
+        FUNCTION NAME: make_env
+
+        DESCRIPTION: This builds a seeded environment with synthetic tiles.
+
+        INPUTS: None
+
+        OUTPUTS: CaptchaEnv
+        """
+        return CaptchaEnv(SyntheticTileSource(), seed=self.SEED)
+
+    def test_run_benchmark(self):
+        """
+        FUNCTION NAME: test_run_benchmark
+
+        DESCRIPTION: This checks that run_benchmark returns a result
+        with the solver's name and the number of challenges.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        n = 10
+        result = run_benchmark(self.make_env(), RandomSolver(seed=self.SEED), n)
+
+        assert isinstance(result, BenchmarkResult)
+        assert result.n == n
+        assert result.solver_name == "random"
+        assert result.seconds_per_challenge >= 0
+
+    def test_oracle_is_perfect(self):
+        """
+        FUNCTION NAME: test_oracle_is_perfect
+
+        DESCRIPTION: This checks that the oracle solver passes every
+        challenge and gets every tile right.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        n = 50
+        result = run_benchmark(self.make_env(), OracleSolver(), n)
+
+        assert result.passes == n
+        assert result.false_positives == 0
+        assert result.false_negatives == 0
+        assert result.pass_rate == 1.0
+        assert result.tile_accuracy == 1.0
+        assert result.precision == 1.0
+        assert result.recall == 1.0
+
+    def test_always_wrong_scores_zero(self):
+        """
+        FUNCTION NAME: test_always_wrong_scores_zero
+
+        DESCRIPTION: This checks that a noisy solver with p=0.0, which
+        gets every tile wrong, scores zero on every metric.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        result = run_benchmark(self.make_env(), NoisySolver(p=0.0, seed=self.SEED), 50)
+
+        assert result.passes == 0
+        assert result.pass_rate == 0.0
+        assert result.tile_accuracy == 0.0
+        assert result.precision == 0.0
+        assert result.recall == 0.0
+
+    def test_counts_cover_every_tile(self):
+        """
+        FUNCTION NAME: test_counts_cover_every_tile
+
+        DESCRIPTION: This checks that every tile of every challenge is
+        counted once, including tiles from challenges that failed.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        n = 100
+        result = run_benchmark(self.make_env(), RandomSolver(seed=self.SEED), n)
+        total = (result.true_positives + result.false_positives
+                 + result.false_negatives + result.true_negatives)
+
+        assert total == NUM_TILES * n
+
+    def test_run_benchmark_is_deterministic(self):
+        """
+        FUNCTION NAME: test_run_benchmark_is_deterministic
+
+        DESCRIPTION: This checks that the same env seed and solver seed
+        give equal results. Timing is excluded from the comparison.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        first = run_benchmark(self.make_env(), RandomSolver(seed=self.SEED), 100)
+        second = run_benchmark(self.make_env(), RandomSolver(seed=self.SEED), 100)
+
+        assert first == second
+
+    @pytest.mark.parametrize("n", [0, -1, 2.5, True])
+    def test_invalid_n_raises(self, n):
+        """
+        FUNCTION NAME: test_invalid_n_raises
+
+        DESCRIPTION: This checks that run_benchmark rejects an n that
+        is not a positive integer.
+
+        INPUTS: n (invalid challenge count)
+
+        OUTPUTS: None
+        """
+        with pytest.raises(ValueError):
+            run_benchmark(self.make_env(), OracleSolver(), n)
+
+    def test_empty_selection_precision(self):
+        """
+        FUNCTION NAME: test_empty_selection_precision
+
+        DESCRIPTION: This checks that precision is 0.0 instead of
+        dividing by zero when the solver never selects a tile.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        result = run_benchmark(self.make_env(), EmptySolver(), 50)
+
+        assert result.true_positives + result.false_positives == 0
+        assert result.precision == 0.0
+        assert result.recall == 0.0
+        assert result.pass_rate == 0.0
+
+    def test_random_tile_accuracy(self):
+        """
+        FUNCTION NAME: test_random_tile_accuracy
+
+        DESCRIPTION: This checks that the random solver gets about half
+        of the tiles right.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        result = run_benchmark(self.make_env(), RandomSolver(seed=self.SEED), 1000)
+
+        assert abs(result.tile_accuracy - 0.5) < 0.05
+
+    def test_compare_solvers(self):
+        """
+        FUNCTION NAME: test_compare_solvers
+
+        DESCRIPTION: This checks that compare_solvers returns one result
+        per solver, in the same order as the solvers.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        solvers = [OracleSolver(), RandomSolver(seed=self.SEED),
+                   NoisySolver(p=0.5, seed=self.SEED)]
+        n = 10
+        results = compare_solvers(SyntheticTileSource(), solvers, n, self.SEED)
+
+        assert isinstance(results, list)
+        assert [r.solver_name for r in results] == [s.name for s in solvers]
+        for result in results:
+            assert isinstance(result, BenchmarkResult)
+            assert result.n == n
+
+    def test_compare_solvers_same_challenges(self):
+        """
+        FUNCTION NAME: test_compare_solvers_same_challenges
+
+        DESCRIPTION: This checks that every solver sees the same
+        challenges. Two identical solvers only give equal results if
+        each one gets a fresh env with the same seed.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        solvers = [RandomSolver(seed=1), RandomSolver(seed=1)]
+        results = compare_solvers(SyntheticTileSource(), solvers, 100, self.SEED)
+
+        assert results[0] == results[1]
+
+    def test_compare_solvers_matches_run_benchmark(self):
+        """
+        FUNCTION NAME: test_compare_solvers_matches_run_benchmark
+
+        DESCRIPTION: This checks that compare_solvers gives the same
+        result as calling run_benchmark with a fresh env of the same seed.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        compared = compare_solvers(SyntheticTileSource(),
+                                   [NoisySolver(p=0.9, seed=1)], 100, self.SEED)
+        direct = run_benchmark(self.make_env(), NoisySolver(p=0.9, seed=1), 100)
+
+        assert compared == [direct]
+
+    def test_compare_solvers_empty_list(self):
+        """
+        FUNCTION NAME: test_compare_solvers_empty_list
+
+        DESCRIPTION: This checks that comparing no solvers returns an
+        empty list.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        assert compare_solvers(SyntheticTileSource(), [], 10, self.SEED) == []

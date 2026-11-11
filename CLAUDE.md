@@ -17,7 +17,7 @@ Planned pipeline (see README.md):
 
 ## Current state
 
-An offline 3x3 challenge environment is being built by hand on the `story/Create-Recaptcha-Environment` branch. It replaces the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. No dataset, model, or training code exists yet, and the framework is undecided (PyTorch with a pretrained ResNet has been suggested). The README's Dataset, Model, and Results tables are still _TBD_.
+The offline 3x3 challenge environment, GUI, and baseline solvers were built by hand and merged into `main` (PR #1, from `story/Create-Recaptcha-Environment`). They replace the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. The benchmark is on `story/Implement-Benchmark-Test`. No dataset, model, or training code exists yet, and the framework is undecided (PyTorch with a pretrained ResNet has been suggested). The README's Dataset, Model, and Results tables are still _TBD_.
 
 ### Done
 
@@ -43,8 +43,13 @@ An offline 3x3 challenge environment is being built by hand on the `story/Create
   - `NoisySolver(p, seed=None)`: gets each tile right with probability `p`, so it passes about p^9 of the time. `p` is required and must be from 0 to 1. `p=1.0` always returns the answer, and `p=0.0` returns exactly the wrong tiles.
   - `make_solver(name, seed=None, p=None)`: builds a solver from `"oracle"`, `"random"`, or `"noisy"`. Raises `ValueError` for an unknown name or for `"noisy"` without `p`.
   - Only baselines may read `challenge.answer`/`labels`. The trained CNN will be another `Solver` that uses only `tiles` and `target`, and its class names must match `challenge.target`.
-- `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI or solvers yet.
-- `Unit-Tests/unit_test.py`: 13 pytest tests covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), and the solvers (oracle, random, noisy, `make_solver`).
+- `Library/benchmark.py`: runs a solver over many challenges and scores it.
+  - `BenchmarkResult` dataclass: stores raw counts summed over all challenges (`solver_name`, `n`, `passes`, TP/FP/FN/TN) plus `seconds_per_challenge`. The rates are computed `@property`s: `pass_rate`, `tile_accuracy`, `precision`, and `recall`. `precision` (and `recall`) return `0.0` when their denominator is 0, e.g. a solver that never selects a tile. `seconds_per_challenge` uses `field(compare=False)`, so two results with the same counts compare `==` regardless of timing.
+  - `run_benchmark(env, solver, n)`: calls `new_challenge`, `solve`, then `grade` `n` times and returns a `BenchmarkResult`. Raises `ValueError` unless `n` is a positive int (`bool` is rejected). It does not catch `grade`'s errors, so a bad solver selection fails loudly.
+  - `compare_solvers(source, solvers, n, seed)`: builds a **fresh** `CaptchaEnv(source, seed=seed)` for each solver so every solver sees the same challenges, and returns a list of results in the same order as `solvers`. Solvers keep their own `rng` state between calls, so pass freshly built solvers for reproducible comparisons.
+  - Measured with `seed=1`, `n=2000`: oracle passes 100%; random 0.1% pass, 0.50 tile accuracy; noisy `p=0.9` 38.1% pass, 0.90 tile accuracy.
+- `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI, solvers, or benchmark yet.
+- `Unit-Tests/unit_test.py`: 28 pytest tests (counting each parametrized case) covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), the solvers (oracle, random, noisy, `make_solver`), and the benchmark (`TestBenchmark`: exact oracle and always-wrong scores, counts covering every tile, determinism, invalid `n`, the precision guard via an `EmptySolver` helper, and `compare_solvers` order and fairness). All tests live in this one file, with one test class per module.
 - `.vscode/settings.json`: pytest discovery on `Unit-Tests`, using `.venv`.
 - `pytest.ini`: puts the repository root on the import path (`pythonpath = .`) so plain `pytest` works as well as `python -m pytest`, and sets `testpaths = Unit-Tests`. It does not change the capture mode.
 - `requirements.txt` and `.gitignore`: dependencies (`pillow`, `pytest`) and exclusions for caches, `.venv/`, `Image-Data/`, and model weights.
@@ -62,11 +67,10 @@ An offline 3x3 challenge environment is being built by hand on the `story/Create
 
 In planned order:
 
-1. **Benchmark** (`Library/benchmark.py`): `run_benchmark(env, solver, n)` reports pass rate and per-tile accuracy (optionally precision/recall from the `GradeResult` counts). Use a seeded env so solvers are compared on the same challenges. Its output feeds the README Results table.
-2. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
-3. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
-4. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>`, and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin.
-5. **Later**: a CNN solver once the dataset and framework are chosen, and a GUI option to highlight a solver's picks, for inspecting model mistakes.
+1. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. Like `SyntheticTileSource`, it must keep no random state of its own and use only the `rng` passed to `get_tile`, so `compare_solvers` can share one source across envs. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
+2. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
+3. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>` (a thin wrapper over `run_benchmark`/`compare_solvers` that prints the `BenchmarkResult` rates), and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin. Its benchmark output feeds the README Results table.
+4. **Later**: a CNN solver once the dataset and framework are chosen, and a GUI option to highlight a solver's picks, for inspecting model mistakes.
 
 Update the Current state and Roadmap sections as items land.
 
@@ -76,7 +80,7 @@ Update the Current state and Roadmap sections as items land.
 ECEN4273_Project2/
 ├── Image-Data/     # train/ val/ test/, one subfolder per class (bicycle/, bus/, traffic_light/, ...)
 ├── Library/        # package: environment, tile sources, GUI, solvers, benchmark, model, training
-├── Unit-Tests/     # pytest tests, files named *_test.py
+├── Unit-Tests/     # pytest tests, currently all in unit_test.py (one Test class per module)
 ├── main.py         # command-line entry point
 └── README.md
 ```
@@ -158,4 +162,4 @@ Match the existing file style:
 
 ## Git
 
-The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`. Current work is on `story/Create-Recaptcha-Environment`.
+The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`. Current work is on `story/Implement-Benchmark-Test`.

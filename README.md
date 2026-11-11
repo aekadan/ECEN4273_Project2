@@ -51,7 +51,7 @@ All challenges are generated and graded locally, with no connection to any real 
 | Synthetic placeholder tiles | Done |
 | Tkinter window for playing challenges by hand | Done |
 | Baseline solvers (oracle, random, noisy) | Done |
-| Benchmark runner for measuring pass rates | Planned |
+| Benchmark runner for measuring pass rates | Done |
 | Tile source for real images | Planned |
 | Command-line options in `main.py` | Planned |
 | Dataset, model, and training | Not started |
@@ -65,6 +65,7 @@ ECEN4273_Project2/
 ├── Image-Data/             # Training, validation, and test images (empty for now)
 ├── Library/                # Project package
 │   ├── __init__.py
+│   ├── benchmark.py        # Runs solvers over many challenges and scores them
 │   ├── captcha_env.py      # Challenge generator and grader
 │   ├── gui.py              # Tkinter window for playing challenges by hand
 │   ├── solvers.py          # Baseline solvers and make_solver
@@ -195,6 +196,37 @@ A challenge passes only if all 9 tiles are right. These baselines set the refere
 | `oracle` | Returns the correct answer | 100% |
 | `random` | Selects each tile on a coin flip | About 0.2% (1/512) |
 | `noisy` | Gets each tile right with probability `p` | About `p`^9 (39% at `p=0.9`) |
+
+### Benchmark solvers
+
+`compare_solvers` runs each solver on the same set of challenges (each one gets a fresh environment built from the same seed) and returns one `BenchmarkResult` per solver:
+
+```python
+from Library.benchmark import compare_solvers
+from Library.solvers import NoisySolver, OracleSolver, RandomSolver
+from Library.tile_sources import SyntheticTileSource
+
+solvers = [OracleSolver(), RandomSolver(seed=1), NoisySolver(p=0.9, seed=1)]
+for r in compare_solvers(SyntheticTileSource(), solvers, n=2000, seed=1):
+    print(f"{r.solver_name:8} pass={r.pass_rate:.3f} acc={r.tile_accuracy:.3f} "
+          f"precision={r.precision:.3f} recall={r.recall:.3f}")
+```
+
+```
+oracle   pass=1.000 acc=1.000 precision=1.000 recall=1.000
+random   pass=0.001 acc=0.501 precision=0.392 recall=0.503
+noisy    pass=0.381 acc=0.898 precision=0.849 recall=0.898
+```
+
+To benchmark a single solver, use `run_benchmark(env, solver, n)` with a seeded `CaptchaEnv`. Build fresh solvers for each comparison, since a solver's random state carries over between runs.
+
+| Metric | Meaning |
+|--------|---------|
+| `pass_rate` | Fraction of challenges with every tile right |
+| `tile_accuracy` | Fraction of individual tiles right |
+| `precision` | Of the tiles selected, the fraction that were targets (0 if nothing was selected) |
+| `recall` | Of the target tiles, the fraction that were selected |
+| `seconds_per_challenge` | Average time to solve and grade one challenge |
 
 _Add the command-line options for benchmarking, training, evaluation, and inference here as they are built._
 
