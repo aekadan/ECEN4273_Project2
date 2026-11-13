@@ -30,6 +30,14 @@ from torchvision import transforms
 from Library.tile_sources import SyntheticTileSource
 
 #############################################################
+#   Global Constants
+#############################################################
+
+IMAGE_SIZE = 224
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+#############################################################
 #   FUNCTIONS
 #############################################################
 
@@ -46,11 +54,11 @@ def get_transform():
     OUTPUTS: Image transformation
     """
     return transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
         transforms.ToTensor(),
         transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
+            mean=IMAGENET_MEAN,
+            std=IMAGENET_STD
         )
     ])
 
@@ -68,25 +76,29 @@ class TileDataset(Dataset):
     Images can be organized into class folders or labeled
     using a CSV file that supports multiple classes.
 
-    INPUTS: data_dir, classes
+    INPUTS: data_dir, classes, transform
 
     OUTPUTS: Image tensor and label tensor
     """
 
-    def __init__(self, data_dir, classes=None):
+    def __init__(self, data_dir, classes=None, transform=None):
         """
         FUNCTION NAME: __init__
 
         DESCRIPTION: This function initializes the dataset,
         determines whether to load images from folders or
         a CSV file, and creates the class index mapping.
+        If no transform is given, get_transform() is used.
 
-        INPUTS: data_dir, classes
+        INPUTS: data_dir, classes, transform (optional
+        image transform, e.g. training augmentation)
 
         OUTPUTS: None
         """
         self.data_dir = data_dir
-        self.transform = get_transform()
+        self.transform = (
+            transform if transform is not None else get_transform()
+        )
         self.samples = []
 
         csv_path = os.path.join(data_dir, "labels.csv")
@@ -240,20 +252,22 @@ class SyntheticTileDataset(Dataset):
     is transformed and assigned a class label for testing
     and training the AI model.
 
-    INPUTS: num_samples, seed
+    INPUTS: num_samples, seed, transform
 
     OUTPUTS: Image tensor and label tensor
     """
 
-    def __init__(self, num_samples=100, seed=42):
+    def __init__(self, num_samples=100, seed=42, transform=None):
         """
         FUNCTION NAME: __init__
 
         DESCRIPTION: This function initializes the synthetic
         dataset, sets the number of samples and random seed,
-        and creates the class index mapping.
+        and creates the class index mapping. If no transform
+        is given, get_transform() is used.
 
-        INPUTS: num_samples, seed
+        INPUTS: num_samples, seed, transform (optional image
+        transform, e.g. training augmentation)
 
         OUTPUTS: None
         """
@@ -266,7 +280,9 @@ class SyntheticTileDataset(Dataset):
 
         self.num_samples = num_samples
         self.seed = seed
-        self.transform = get_transform()
+        self.transform = (
+            transform if transform is not None else get_transform()
+        )
 
     def __len__(self):
         """
