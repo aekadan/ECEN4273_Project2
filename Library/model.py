@@ -93,13 +93,23 @@ def save_checkpoint(path, model, classes, thresholds=None, extra=None):
     # 1. Check the head matches the class list:
     #    model.fc.out_features must equal len(classes),
     #    otherwise raise ValueError.
+    if model.fc.out_features != len(classes):
+        raise ValueError("Number of classes does not match model output size")
 
     # 2. If thresholds is given, check every key is in classes
     #    (raise ValueError on an unknown class).
+    if thresholds is not None:
+        for name in thresholds:
+            if name not in classes:
+                raise ValueError(f"Unknown class in thresholds: {name}")
 
     # 3. Copy the weights to CPU so the file loads on a machine
     #    without a GPU:
     #    {name: tensor.detach().cpu() for name, tensor in state_dict}
+    cpu_state = {
+        name: tensor.detach().cpu()
+        for name, tensor in model.state_dict().items()
+    }
 
     # 4. Build the checkpoint dict:
     #    "arch"        -> MODEL_ARCH
@@ -108,11 +118,27 @@ def save_checkpoint(path, model, classes, thresholds=None, extra=None):
     #    "model_state" -> CPU state dict from step 3
     #    then merge in extra, but don't let it overwrite the
     #    four keys above (raise ValueError if it tries).
+    checkpoint = {
+        "arch": MODEL_ARCH,
+        "classes": list(classes),
+        "thresholds": thresholds,
+        "model_state": cpu_state,
+    }
+
+    if extra is not None:
+        for key in extra:
+            if key in checkpoint:
+                raise ValueError(f"Extra cannot overwrite checkpoint key: {key}")
+        checkpoint.update(extra)
 
     # 5. Create the parent folder if needed (os.makedirs with
     #    exist_ok=True; skip when the path has no folder).
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
 
     # 6. torch.save(checkpoint, path)
+    torch.save(checkpoint, path)
 
 
 def load_checkpoint(path, expected_classes=None, device="cpu"):
@@ -134,19 +160,30 @@ def load_checkpoint(path, expected_classes=None, device="cpu"):
     # 1. torch.load(path, map_location="cpu", weights_only=True)
     #    weights_only=True is why extra must hold only plain
     #    Python values (no dataclasses or custom objects).
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
 
     # 2. Check checkpoint["arch"] == MODEL_ARCH, otherwise
     #    raise ValueError.
+    if checkpoint["arch"] != MODEL_ARCH:
+        raise ValueError(f"Unsupported model architecture: {checkpoint['arch']}")
 
     # 3. If expected_classes is given, compare it to
     #    checkpoint["classes"] in content AND order; raise
     #    ValueError showing both lists if they differ.
+    classes = checkpoint["classes"]
+    if expected_classes is not None and list(expected_classes) != classes:
+        raise ValueError(f"Expected classes {list(expected_classes)}, got {classes}")
 
     # 4. model = create_model(num_classes=len(classes),
     #                         pretrained=False)
+    model = create_model(num_classes=len(classes), pretrained=False)
 
     # 5. model.load_state_dict(checkpoint["model_state"])
+    model.load_state_dict(checkpoint["model_state"])
 
     # 6. Move to device and switch to eval mode.
+    model = model.to(device)
+    model.eval()
 
     # 7. return model, checkpoint
+    return model, checkpoint
