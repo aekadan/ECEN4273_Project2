@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
+from sympy import false
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -243,7 +244,7 @@ def build_datasets(config : TrainConfig):
     return train_tile_dataset, val_tile_dataset
 
 
-def build_loaders(config, train_dataset, val_dataset, device):
+def build_loaders(config: TrainConfig, train_dataset, val_dataset, device):
     """
     FUNCTION NAME: build_loaders
 
@@ -253,11 +254,24 @@ def build_loaders(config, train_dataset, val_dataset, device):
 
     OUTPUTS: (train_loader, val_loader)
     """
-    # TODO: train shuffles with generator=torch.Generator().manual_seed(seed).
-    #       Val doesn't shuffle.
-    # Hint: pin_memory=(device.type == "cuda").
-    pass
+    pin_memory = (device.type == "cuda")
+    persistent_workers = config.num_workers > 0
 
+    train_loader = DataLoader(dataset=train_dataset,
+                              batch_size=config.batch_size,
+                              shuffle=True,
+                              generator=torch.Generator().manual_seed(config.seed),
+                              num_workers=config.num_workers,
+                              pin_memory=pin_memory,
+                              persistent_workers=persistent_workers)
+    val_loader = DataLoader(dataset=val_dataset,
+                            batch_size=config.batch_size,
+                            shuffle=False,
+                            num_workers=config.num_workers,
+                            pin_memory=pin_memory,
+                            persistent_workers=persistent_workers)
+
+    return train_loader, val_loader
 
 def build_optimizer(model, config, steps_per_epoch):
     """
@@ -270,8 +284,12 @@ def build_optimizer(model, config, steps_per_epoch):
 
     OUTPUTS: (optimizer, scheduler)
     """
-    # TODO: torch.optim.AdamW(lr, weight_decay)
-    # TODO: CosineAnnealingLR with T_max = epochs * steps_per_epoch
+    optimizer = torch.optim.AdamW(params=model.parameters(),lr=config.lr, 
+                                         weight_decay=config.weight_decay)
+    t_max = config.epochs * steps_per_epoch
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, t_max)
+
+    return optimizer, scheduler
 
 
 def use_bf16(device):
@@ -284,8 +302,11 @@ def use_bf16(device):
 
     OUTPUTS: bool
     """
-    # TODO: True only if device is cuda AND torch.cuda.is_bf16_supported().
-    pass
+    result: bool = False
+    if device.type == "cuda" and torch.cuda.is_bf16_supported():
+        result = True
+    
+    return result
 
 
 def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, device, bf16):

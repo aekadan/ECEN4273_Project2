@@ -366,3 +366,201 @@ class TestTrain:
 
         with pytest.raises(ValueError):
             train.build_datasets(config)
+
+    def test_build_loaders_batches(self, tmp_path):
+        """
+        FUNCTION NAME: test_build_loaders_batches
+
+        DESCRIPTION: Both loaders yield batches of the
+        configured size with image and multi-hot label
+        tensors, and cover every sample once per epoch.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        config = make_config(tmp_path)
+        train_set, val_set = train.build_datasets(config)
+        train_loader, val_loader = train.build_loaders(
+            config, train_set, val_set, torch.device("cpu"))
+
+        images, labels = next(iter(train_loader))
+        assert images.shape == (config.batch_size, 3, IMAGE_SIZE, IMAGE_SIZE)
+        assert labels.shape == (config.batch_size, len(train_set.classes))
+
+        assert sum(len(batch[0]) for batch in train_loader) == TINY_TRAIN_SAMPLES
+        assert sum(len(batch[0]) for batch in val_loader) == TINY_VAL_SAMPLES
+
+    def test_build_loaders_shuffle(self, tmp_path):
+        """
+        FUNCTION NAME: test_build_loaders_shuffle
+
+        DESCRIPTION: Train shuffles in an order fixed by the
+        config seed; val keeps the dataset order. Uses a plain
+        list of numbers as the dataset so the order is easy to
+        read.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        data = list(range(32))
+        device = torch.device("cpu")
+
+        def train_order(seed):
+            config = make_config(tmp_path, batch_size=32, seed=seed)
+            loader, _ = train.build_loaders(config, data, data, device)
+            return next(iter(loader)).tolist()
+
+        assert train_order(0) != data
+        assert train_order(0) == train_order(0)
+        assert train_order(0) != train_order(1)
+
+        config = make_config(tmp_path, batch_size=32)
+        _, val_loader = train.build_loaders(config, data, data, device)
+        assert next(iter(val_loader)).tolist() == data
+
+    def test_build_loaders_options(self, tmp_path):
+        """
+        FUNCTION NAME: test_build_loaders_options
+
+        DESCRIPTION: pin_memory is only on for CUDA, and
+        workers are passed through (kept alive between epochs
+        only when there are any).
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        data = list(range(4))
+
+        config = make_config(tmp_path)
+        train_loader, val_loader = train.build_loaders(
+            config, data, data, torch.device("cpu"))
+        for loader in (train_loader, val_loader):
+            assert loader.pin_memory is False
+            assert loader.num_workers == 0
+            assert loader.persistent_workers is False
+
+        config = make_config(tmp_path, num_workers=2)
+        train_loader, val_loader = train.build_loaders(
+            config, data, data, torch.device("cuda"))
+        for loader in (train_loader, val_loader):
+            assert loader.pin_memory is True
+            assert loader.num_workers == 2
+            assert loader.persistent_workers is True
+
+    def test_build_optimizer_settings(self, tmp_path):
+        """
+        FUNCTION NAME: test_build_optimizer_settings
+
+        DESCRIPTION: Returns an AdamW optimizer that holds
+        every model parameter with the config's lr and weight
+        decay, and a cosine scheduler whose length is the
+        total number of batches (epochs * steps_per_epoch).
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        model = torch.nn.Linear(4, 2)
+        config = make_config(tmp_path, epochs=3, lr=1e-3, weight_decay=0.05)
+        optimizer, scheduler = train.build_optimizer(model, config,
+                                                     steps_per_epoch=7)
+
+        assert isinstance(optimizer, torch.optim.AdamW)
+        group = optimizer.param_groups[0]
+        assert group["lr"] == pytest.approx(1e-3)
+        assert group["weight_decay"] == pytest.approx(0.05)
+        optimized = {id(p) for g in optimizer.param_groups for p in g["params"]}
+        assert optimized == {id(p) for p in model.parameters()}
+
+        assert isinstance(scheduler, torch.optim.lr_scheduler.CosineAnnealingLR)
+        assert scheduler.T_max == 3 * 7
+
+    def test_build_optimizer_cosine_schedule(self, tmp_path):
+        """
+        FUNCTION NAME: test_build_optimizer_cosine_schedule
+
+        DESCRIPTION: Stepping once per batch, the learning rate
+        starts at config.lr, is half of it at the midpoint,
+        keeps falling, and reaches about 0 at the last step.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        model = torch.nn.Linear(4, 2)
+        config = make_config(tmp_path, epochs=2, lr=3e-4)
+        optimizer, scheduler = train.build_optimizer(model, config,
+                                                     steps_per_epoch=5)
+
+        lrs = [scheduler.get_last_lr()[0]]
+        for _ in range(10):
+            optimizer.step()
+            scheduler.step()
+            lrs.append(scheduler.get_last_lr()[0])
+
+        assert lrs[0] == pytest.approx(3e-4)
+        assert lrs[5] == pytest.approx(1.5e-4)
+        assert lrs[10] == pytest.approx(0.0, abs=1e-12)
+        assert all(later < earlier for earlier, later in zip(lrs, lrs[1:]))
+
+    def test_build_optimizer_updates_weights(self, tmp_path):
+        """
+        FUNCTION NAME: test_build_optimizer_updates_weights
+
+        DESCRIPTION: One optimizer step after a backward pass
+        changes the model's weights.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        torch.manual_seed(0)
+        model = torch.nn.Linear(4, 2)
+        before = model.weight.detach().clone()
+        optimizer, _ = train.build_optimizer(model, make_config(tmp_path),
+                                             steps_per_epoch=1)
+
+        loss = model(torch.randn(8, 4)).pow(2).mean()
+        loss.backward()
+        optimizer.step()
+
+        assert not torch.equal(model.weight, before)
+
+    @pytest.mark.parametrize("supported", [True, False])
+    def test_use_bf16_cuda(self, monkeypatch, supported):
+        """
+        FUNCTION NAME: test_use_bf16_cuda
+
+        DESCRIPTION: On a CUDA device, bf16 is used exactly
+        when the GPU supports it (faked with monkeypatch so
+        the test runs without a GPU).
+
+        INPUTS: monkeypatch (pytest fixture), supported (bool)
+
+        OUTPUTS: None
+        """
+        monkeypatch.setattr(torch.cuda, "is_bf16_supported",
+                            lambda *args, **kwargs: supported)
+        assert train.use_bf16(torch.device("cuda")) is supported
+
+    def test_use_bf16_cpu(self, monkeypatch):
+        """
+        FUNCTION NAME: test_use_bf16_cpu
+
+        DESCRIPTION: On the CPU, bf16 is never used, and the
+        GPU support check is not even called (it can fail on
+        machines without CUDA).
+
+        INPUTS: monkeypatch (pytest fixture)
+
+        OUTPUTS: None
+        """
+        def fail(*args, **kwargs):
+            raise AssertionError("is_bf16_supported called for a CPU device")
+
+        monkeypatch.setattr(torch.cuda, "is_bf16_supported", fail)
+        assert train.use_bf16(torch.device("cpu")) is False
+
