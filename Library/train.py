@@ -40,6 +40,7 @@ from .dataset import (
     IMAGENET_STD,
     SyntheticTileDataset,
     TileDataset,
+    get_transform,
 )
 from .model import create_model, save_checkpoint, load_checkpoint
 
@@ -61,6 +62,8 @@ SYNTHETIC_VAL_SEED_OFFSET = 10_000
 
 DEVICE_CHOICES = ("auto", "cuda", "cpu")
 PREDICTION_THRESHOLD = 0.5
+
+
 
 #############################################################
 #   CLASSES
@@ -134,12 +137,13 @@ def get_train_transform():
 
     OUTPUTS: torchvision transforms.Compose
     """
-    # TODO: RandomResizedCrop(IMAGE_SIZE, ...), RandomHorizontalFlip,
-    #       a light ColorJitter, ToTensor, Normalize(IMAGENET_MEAN, IMAGENET_STD).
-    # Hint: end the same way dataset.get_transform() does so train and
-    #       eval tensors match.
-    pass
-
+    RandomResizedCrop = transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.8, 1.0), ratio=(3/4, 4/3))
+    RandomHorizontalFlip = transforms.RandomHorizontalFlip()
+    ColorJitter = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+    ToTensor = transforms.ToTensor()
+    Normalize = transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)
+    return transforms.Compose([RandomResizedCrop, RandomHorizontalFlip, ColorJitter, ToTensor, Normalize])
+    
 
 def select_device(requested):
     """
@@ -151,10 +155,15 @@ def select_device(requested):
 
     OUTPUTS: torch.device
     """
-    # TODO: reject anything not in DEVICE_CHOICES (ValueError).
-    # TODO: "auto" picks cuda only if torch.cuda.is_available().
-    # TODO: "cuda" without a GPU raises ValueError with a helpful message.
-    pass
+    if requested not in DEVICE_CHOICES:
+        raise ValueError(f"Invalid device choice: {requested}. Must be one of {DEVICE_CHOICES}.")
+    if requested == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if requested == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA requested but no GPU is available.")
+        return torch.device("cuda")
+    return torch.device("cpu")
 
 
 def set_seed(seed):
@@ -167,11 +176,13 @@ def set_seed(seed):
 
     OUTPUTS: None
     """
-    # TODO: random.seed, torch.manual_seed (this also seeds CUDA).
-    pass
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
-def validate_config(config):
+def validate_config(config : TrainConfig):
     """
     FUNCTION NAME: validate_config
 
@@ -182,14 +193,23 @@ def validate_config(config):
 
     OUTPUTS: None
     """
-    # TODO: epochs and batch_size are ints >= 1. Reject bool, because
-    #       isinstance(True, int) is True.
-    # TODO: lr > 0, weight_decay >= 0, num_workers >= 0,
-    #       synthetic sample counts >= 1.
-    pass
+    if not isinstance(config.epochs, int) or config.epochs < 1:
+        raise ValueError("Epochs must be an integer >= 1.")
+    if not isinstance(config.batch_size, int) or config.batch_size < 1:
+        raise ValueError("Batch size must be an integer >= 1.")
+    if config.lr <= 0:
+        raise ValueError("Learning rate must be > 0.")
+    if config.weight_decay < 0:
+        raise ValueError("Weight decay must be >= 0.")
+    if config.num_workers < 0:
+        raise ValueError("Number of workers must be >= 0.")
+    if config.synthetic_train_samples < 1:
+        raise ValueError("Synthetic train samples must be >= 1.")
+    if config.synthetic_val_samples < 1:
+        raise ValueError("Synthetic val samples must be >= 1.")
 
 
-def build_datasets(config):
+def build_datasets(config : TrainConfig):
     """
     FUNCTION NAME: build_datasets
 
@@ -199,14 +219,28 @@ def build_datasets(config):
 
     OUTPUTS: (train_dataset, val_dataset)
     """
-    # TODO (synthetic): two SyntheticTileDatasets. Train uses
-    #       get_train_transform(); val uses get_transform() and
-    #       seed + SYNTHETIC_VAL_SEED_OFFSET.
-    # TODO (folders): data_dir/train and data_dir/val must exist,
-    #       otherwise raise FileNotFoundError.
-    # Hint: build val with classes=train.classes so the label order
-    #       matches. Never load test/ here.
-    pass
+    if config.synthetic:
+        train_synthetic_dataset: SyntheticTileDataset = SyntheticTileDataset(num_samples=config.synthetic_train_samples,
+                                                                             seed = config.seed, 
+                                                                             transform=get_train_transform())
+        val_synthetic_dataset : SyntheticTileDataset = SyntheticTileDataset(num_samples=config.synthetic_val_samples, 
+                                                                            seed=config.seed + SYNTHETIC_VAL_SEED_OFFSET, 
+                                                                            transform=get_transform())
+        return train_synthetic_dataset, val_synthetic_dataset
+
+    data_dir = Path(config.data_dir)
+    train_dir = data_dir / "train"
+    val_dir = data_dir / "val"
+
+    if not train_dir.is_dir():
+        raise FileNotFoundError(f"{train_dir} does not exist")
+    if not val_dir.is_dir():
+        raise FileNotFoundError(f"{val_dir} does not exist")
+
+    train_tile_dataset: TileDataset = TileDataset(data_dir=train_dir, transform=get_train_transform())
+    val_tile_dataset: TileDataset = TileDataset(data_dir=val_dir, classes=train_tile_dataset.classes, transform=get_transform())
+
+    return train_tile_dataset, val_tile_dataset
 
 
 def build_loaders(config, train_dataset, val_dataset, device):
@@ -238,7 +272,6 @@ def build_optimizer(model, config, steps_per_epoch):
     """
     # TODO: torch.optim.AdamW(lr, weight_decay)
     # TODO: CosineAnnealingLR with T_max = epochs * steps_per_epoch
-    pass
 
 
 def use_bf16(device):
