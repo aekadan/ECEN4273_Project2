@@ -53,8 +53,8 @@ All challenges are generated and graded locally, with no connection to any real 
 | Baseline solvers (oracle, random, noisy) | Done |
 | Benchmark runner for measuring pass rates | Done |
 | Dataset loader (`TileDataset`, `SyntheticTileDataset`) | Done |
-| ResNet-18 model factory and `predict` | Done |
-| Training loop (`train.py`) | Planned |
+| ResNet-18 model factory, `predict`, and checkpoints | Done |
+| Training loop (`train.py`) | Done (proven on synthetic tiles) |
 | Model solver and per-class thresholds | Planned |
 | Tile source for real images | Planned |
 | Command-line options in `main.py` | Planned |
@@ -73,12 +73,14 @@ ECEN4273_Project2/
 │   ├── captcha_env.py      # Challenge generator and grader
 │   ├── dataset.py          # PyTorch datasets: image folders, labels.csv, synthetic tiles
 │   ├── gui.py              # Tkinter window for playing challenges by hand
-│   ├── model.py            # ResNet-18 classifier (create_model, predict)
+│   ├── model.py            # ResNet-18 classifier, predict, save/load checkpoints
 │   ├── solvers.py          # Baseline solvers and make_solver
-│   └── tile_sources.py     # Tile image sources (synthetic placeholder tiles for now)
+│   ├── tile_sources.py     # Tile image sources (synthetic placeholder tiles for now)
+│   └── train.py            # Training loop (python -m Library.train)
 ├── Unit-Tests/             # Unit tests
 │   ├── unit_test.py        # Environment, tile sources, GUI, solvers, benchmark
-│   └── test_dataset.py     # Dataset loader
+│   ├── test_dataset.py     # Dataset loader
+│   └── test_train.py       # Training loop and checkpoints
 ├── main.py                 # Entry point for the project (no commands yet)
 ├── pytest.ini              # Test discovery settings
 ├── requirements.txt
@@ -183,10 +185,11 @@ Train on `train/`, tune on `val/`, and benchmark only on `test/`.
 | Input size      | 224x224 RGB, ImageNet mean/std normalization |
 | Output          | Sigmoid probability per class (multi-label) |
 | Selection       | Tiles whose probability for the target class is at or above a per-class threshold tuned on `val/` (planned) |
-| Loss function   | Binary cross-entropy with logits (planned) |
-| Optimizer       | AdamW with a cosine schedule (planned) |
-| Training setup  | CUDA if available, bf16 mixed precision, batch 128 (64 if out of memory), `--device cpu` fallback (planned) |
-| Augmentation    | Random resized crop, horizontal flip, color jitter on training images only (planned) |
+| Loss function   | Binary cross-entropy with logits |
+| Optimizer       | AdamW (lr 3e-4, weight decay 1e-4) with a per-batch cosine schedule |
+| Training setup  | CUDA if available, bf16 mixed precision, batch 128 (64 if out of memory), `--device cpu` fallback |
+| Augmentation    | Random resized crop, horizontal flip, color jitter on training images only |
+| Checkpoint      | Best epoch by val loss: weights, ordered class list, thresholds (once tuned), config, and history |
 
 ```python
 from Library.dataset import SyntheticTileDataset
@@ -200,6 +203,44 @@ probs = predict(model, images)  # shape (8, 4), untrained
 ```
 
 Always build the model with `num_classes=len(dataset.classes)`, so the head matches the dataset's classes and their order.
+
+### Training
+
+Run from the repository root:
+
+```bash
+# Check the wiring on synthetic tiles (results mean nothing about real images)
+python -m Library.train --synthetic --epochs 3
+
+# Train on Image-Data/train, validating on Image-Data/val
+python -m Library.train --data Image-Data --epochs 10
+
+# No GPU, or out of memory
+python -m Library.train --data Image-Data --device cpu --batch-size 64
+```
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `--data` / `--synthetic` | `Image-Data` | Folder holding `train/` and `val/`, or synthetic tiles instead |
+| `--epochs` | 10 | Number of passes over the training data |
+| `--batch-size` | 128 | Use 64 if CUDA runs out of memory |
+| `--lr`, `--weight-decay` | 3e-4, 1e-4 | AdamW settings |
+| `--device` | `auto` | `auto`, `cuda`, or `cpu` |
+| `--workers` | 4 | DataLoader worker processes (0 loads in the main process) |
+| `--seed` | 0 | Seed for weights init, shuffling, and augmentation |
+| `--out` | `checkpoints/model.pt` | Checkpoint path (the folder is gitignored) |
+| `--no-pretrained` | off | Start from random weights instead of ImageNet |
+
+Each epoch prints the train loss, val loss, val accuracy, and learning rate, with `*` when val loss improves. The checkpoint always holds the best epoch, and `model_history.json` next to it holds the per-epoch numbers for plotting. The first run downloads the ImageNet weights (about 45 MB).
+
+To load a trained model:
+
+```python
+from Library.model import load_checkpoint, predict
+
+model, checkpoint = load_checkpoint("checkpoints/model.pt")
+print(checkpoint["classes"], checkpoint["best_epoch"])
+```
 
 ---
 
@@ -280,7 +321,7 @@ _Add the command-line options for benchmarking, training, evaluation, and infere
 
 ## Testing
 
-Unit tests are in `Unit-Tests/`: `unit_test.py` covers the environment, tile sources, GUI, solvers, and benchmark, and `test_dataset.py` covers the dataset loader (it needs PyTorch installed). To run them:
+Unit tests are in `Unit-Tests/`: `unit_test.py` covers the environment, tile sources, GUI, solvers, and benchmark, `test_dataset.py` covers the dataset loader, and `test_train.py` covers the training loop and checkpoints (both need PyTorch installed; the training tests run on the CPU with tiny synthetic data, so they need no GPU or download). To run them:
 
 ```bash
 python -m pytest Unit-Tests

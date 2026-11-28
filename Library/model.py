@@ -90,54 +90,45 @@ def save_checkpoint(path, model, classes, thresholds=None, extra=None):
 
     OUTPUTS: None
     """
-    # 1. Check the head matches the class list:
-    #    model.fc.out_features must equal len(classes),
-    #    otherwise raise ValueError.
+    # 1. The head size must match the class list
     if model.fc.out_features != len(classes):
-        raise ValueError("Number of classes does not match model output size")
+        raise ValueError(
+            f"Model head has {model.fc.out_features} outputs but "
+            f"{len(classes)} classes were given."
+        )
 
-    # 2. If thresholds is given, check every key is in classes
-    #    (raise ValueError on an unknown class).
+    # 2. Every threshold must name a known class
     if thresholds is not None:
-        for name in thresholds:
-            if name not in classes:
-                raise ValueError(f"Unknown class in thresholds: {name}")
+        unknown = [name for name in thresholds if name not in classes]
+        if unknown:
+            raise ValueError(f"Thresholds name unknown classes: {unknown}")
+        thresholds = {name: float(value) for name, value in thresholds.items()}
 
-    # 3. Copy the weights to CPU so the file loads on a machine
-    #    without a GPU:
-    #    {name: tensor.detach().cpu() for name, tensor in state_dict}
-    cpu_state = {
+    # 3. Copy the weights to CPU so the file loads without a GPU
+    model_state = {
         name: tensor.detach().cpu()
         for name, tensor in model.state_dict().items()
     }
 
-    # 4. Build the checkpoint dict:
-    #    "arch"        -> MODEL_ARCH
-    #    "classes"     -> list(classes)
-    #    "thresholds"  -> thresholds (or None)
-    #    "model_state" -> CPU state dict from step 3
-    #    then merge in extra, but don't let it overwrite the
-    #    four keys above (raise ValueError if it tries).
+    # 4. Build the checkpoint dict; extra may not overwrite the core keys
     checkpoint = {
         "arch": MODEL_ARCH,
         "classes": list(classes),
         "thresholds": thresholds,
-        "model_state": cpu_state,
+        "model_state": model_state,
     }
-
-    if extra is not None:
-        for key in extra:
-            if key in checkpoint:
-                raise ValueError(f"Extra cannot overwrite checkpoint key: {key}")
+    if extra:
+        clashes = [key for key in extra if key in checkpoint]
+        if clashes:
+            raise ValueError(f"extra may not overwrite reserved keys: {clashes}")
         checkpoint.update(extra)
 
-    # 5. Create the parent folder if needed (os.makedirs with
-    #    exist_ok=True; skip when the path has no folder).
-    folder = os.path.dirname(path)
+    # 5. Create the parent folder if needed
+    folder = os.path.dirname(str(path))
     if folder:
         os.makedirs(folder, exist_ok=True)
 
-    # 6. torch.save(checkpoint, path)
+    # 6. Write it
     torch.save(checkpoint, path)
 
 
@@ -157,33 +148,30 @@ def load_checkpoint(path, expected_classes=None, device="cpu"):
     OUTPUTS: (model, checkpoint) - the ready-to-use model and
     the full checkpoint dict (classes, thresholds, extras)
     """
-    # 1. torch.load(path, map_location="cpu", weights_only=True)
-    #    weights_only=True is why extra must hold only plain
-    #    Python values (no dataclasses or custom objects).
+    # 1. weights_only=True only allows plain Python values and tensors
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
 
-    # 2. Check checkpoint["arch"] == MODEL_ARCH, otherwise
-    #    raise ValueError.
-    if checkpoint["arch"] != MODEL_ARCH:
-        raise ValueError(f"Unsupported model architecture: {checkpoint['arch']}")
+    # 2. Check the architecture
+    if checkpoint.get("arch") != MODEL_ARCH:
+        raise ValueError(
+            f"Checkpoint arch is {checkpoint.get('arch')!r}, expected {MODEL_ARCH!r}."
+        )
 
-    # 3. If expected_classes is given, compare it to
-    #    checkpoint["classes"] in content AND order; raise
-    #    ValueError showing both lists if they differ.
+    # 3. Check the classes match in content and order
     classes = checkpoint["classes"]
-    if expected_classes is not None and list(expected_classes) != classes:
-        raise ValueError(f"Expected classes {list(expected_classes)}, got {classes}")
+    if expected_classes is not None and list(expected_classes) != list(classes):
+        raise ValueError(
+            f"Checkpoint classes {list(classes)} do not match expected "
+            f"classes {list(expected_classes)}."
+        )
 
-    # 4. model = create_model(num_classes=len(classes),
-    #                         pretrained=False)
+    # 4-5. Rebuild the model without downloading weights, then load them
     model = create_model(num_classes=len(classes), pretrained=False)
-
-    # 5. model.load_state_dict(checkpoint["model_state"])
     model.load_state_dict(checkpoint["model_state"])
 
-    # 6. Move to device and switch to eval mode.
+    # 6. Move to device and switch to eval mode
     model = model.to(device)
     model.eval()
 
-    # 7. return model, checkpoint
+    # 7. Return the model and the full checkpoint
     return model, checkpoint
