@@ -19,7 +19,7 @@ Planned pipeline (see README.md):
 
 The offline 3x3 challenge environment, GUI, and baseline solvers were built by hand and merged into `main` (PR #1, from `story/Create-Recaptcha-Environment`). They replace the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. The dataset loader landed in PR #2 (`feature/ai-dataset-erica`) and the benchmark in PR #3 (`story/Implement-Benchmark-Test`). The checkpoint helpers in `model.py` (PR #6) and the training loop `Library/train.py` (PR #7, `story/Create-training-loop`) are merged, and PR #5 added the COCO dataset script `prepare_dataset.py`. The framework is PyTorch with a pretrained ResNet-18 (`Library/model.py`).
 
-A real dataset now exists (COCO crops, see `prepare_dataset.py` below), and the model has been trained on it on the RTX 4060 (CUDA, bf16, batch 128, about 4 s per epoch). The best val loss is about 0.10 (around epoch 6-8) with 96.0-96.8% val accuracy (per tile-class decision at 0.5). Longer runs overfit by the loss, yet a 100-epoch run reaches 97.0% val accuracy late; see "Training runs" below. There is still no model solver and no `FolderTileSource`, so challenges still use synthetic tiles and the README's test-split Results table is still _TBD_. `--device cpu` remains the fallback for teammates without a GPU.
+A real dataset now exists (COCO crops, see `prepare_dataset.py` below), and the model has been trained on it on the RTX 4060 (CUDA, bf16, batch 128, about 4 s per epoch). The best val loss is about 0.10 (around epoch 6-8) with 96.0-96.8% val accuracy (per tile-class decision at 0.5). Longer runs overfit by the loss, yet a 100-epoch run reaches 97.0% val accuracy late; see "Training runs" below. `FolderTileSource`, `ModelSolver`, and the `main.py` command line (`play`, `bench`) are in place, and the README's test-split Results table is filled in: `model_30ep` passes 61.1% of test challenges at the untuned 0.5 thresholds (see "Challenge results" below). `--device cpu` remains the fallback for teammates without a GPU.
 
 ### Done
 
@@ -82,7 +82,10 @@ A real dataset now exists (COCO crops, see `prepare_dataset.py` below), and the 
   - bf16 autocast only on CUDA with bf16 support; no GradScaler.
 - `prepare_dataset.py` (repo root, by Erica): builds `Image-Data/` from COCO 2017. It expects `Image-Data/original/train2017.zip` and `Image-Data/original/instances_train2017.json`, crops each object's bounding box (non-crowd boxes only, at most one crop per source photo across all classes, `random.Random(42)`), and saves JPEGs (quality 95) for `hydrant` (COCO id 11), `bicycle` (2), `bus` (6), and `traffic_light` (10), 1000 per class split 700/150/150 into `train/`, `val/`, `test/`. It also writes `category_statistics.csv`, `source_licenses.csv` (per-photo Flickr license and URL), and `dataset_manifest.csv` (split, category, filename, source image and annotation ids, license) into `Image-Data/`. Class folder names match `DEFAULT_CLASSES`. Every crop is tightly centered on one object of its class, so there are no background tiles and crop sizes vary (the transforms resize to 224). It has no tests and does not follow the `Library/` import conventions; it is a one-off script.
 - `Training/plot_history.py`: standalone matplotlib script (not part of `Library`, no tests) that plots a history JSON as train/val loss and val accuracy with the best epoch marked. `python Training/plot_history.py --history checkpoints/<run>_history.json` saves `Training/<run>_history.png`; add `--watch` (and optionally `--interval`) in a second terminal during training for a live window that redraws each epoch and saves the PNG when closed. Needs `matplotlib` (in `requirements.txt`).
-- `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI, solvers, or benchmark yet.
+- `main.py`: thin `argparse` command line; `main(argv=None)` returns an exit code (0, or 1 after printing a `FileNotFoundError`/`ValueError`), and with no command it prints the help.
+  - `play`: opens `CaptchaApp`. It imports the GUI inside `run_play`, so `bench` works on machines without tkinter.
+  - `bench`: runs `compare_solvers` and prints a table (pass rate, tile acc, precision, recall, ms/chal). Options: `--solver` (any of `oracle random noisy model`, default the three baselines), `-n` (1000), `--p` (0.9), `--checkpoint` (`train.DEFAULT_CHECKPOINT`, `checkpoints/model.pt`, which doesn't exist on Zane's machine, so pass e.g. `checkpoints/model_30ep.pt`), `--device` (`auto`).
+  - Shared options: `--data` (split folder for `FolderTileSource`; omitted means synthetic tiles) and `--seed` (0). `build_source` warns on stderr when `--data` points at a `train` folder.
 - `Unit-Tests/unit_test.py`: 28 pytest tests (counting each parametrized case) covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), the solvers (oracle, random, noisy, `make_solver`), and the benchmark (`TestBenchmark`: exact oracle and always-wrong scores, counts covering every tile, determinism, invalid `n`, the precision guard via an `EmptySolver` helper, and `compare_solvers` order and fairness). It uses one test class per module.
 - `Unit-Tests/test_model_solver.py`: 13 tests: `TestFolderTileSource` (class folders, explicit classes, errors, `get_tile`, rng-only determinism, `Challenge.sources`, shared source in `compare_solvers`) and `TestModelSolver` (selection, thresholds, `tile_probabilities`, class checks, `make_solver("model")`, benchmark). Helpers `make_split` (tiny folder of solid-color images) and `make_checkpoint` (ResNet-18, `pretrained=False`, zero head weights and chosen biases, so every tile gets `sigmoid(bias)`).
 - `Unit-Tests/test_main.py`: 7 tests in `TestCommandLine` for `main.py` (help, synthetic bench, folder bench with a model, seeded repeatability, errors, train-split warning, `play` with a fake `Library.gui` in `sys.modules`). These two files sit outside `unit_test.py` so they run without tkinter; `unit_test.py`'s `test_main` calls `main([])`.
@@ -122,17 +125,39 @@ Takeaways:
 - Val **accuracy** keeps improving late in long runs (97.0% at epoch 60 vs. 96.0% at the best-loss epoch 6): the late model makes more correct decisions but is overconfident on its mistakes, which BCE punishes. Since pass rate depends on decisions, selecting the checkpoint by val loss (what `fit` does) may not maximize pass rate. Consider tracking or selecting by val accuracy (or by pass rate after the threshold sweep), or saving the last epoch as well, before picking a final model.
 - Lowering val loss itself needs more data, background tiles, or stronger regularization.
 
+### Challenge results
+
+`python main.py bench --data Image-Data/test -n 1000 --seed 0 --solver oracle random noisy model --checkpoint checkpoints/<run>.pt --device cuda` on the RTX 4060, all thresholds 0.5. The raw output is in `Training/Challenge_Results.txt` (the `model_30ep` run); this is what the README Results table reports.
+
+| Solver | Pass rate | Tile acc | Precision | Recall | ms/chal |
+|---|---|---|---|---|---|
+| oracle | 100.0% | 1.000 | 1.000 | 1.000 | 3.6 |
+| random | 0.2% | 0.497 | 0.383 | 0.488 | 3.6 |
+| noisy (p=0.9) | 40.3% | 0.902 | 0.854 | 0.902 | 3.6 |
+| `model_10ep` | 60.5% | 0.944 | 0.961 | 0.892 | 13.5 |
+| `model_30ep` | 61.1% | 0.946 | 0.958 | 0.899 | 13.3 |
+| `model_100ep` | 59.2% | 0.940 | 0.951 | 0.889 | 14.5 |
+
+Takeaways:
+- Pass rate follows tile accuracy to the 9th power (0.946^9 ≈ 61%).
+- Test tile accuracy (94.6%) is below val accuracy (96.8%) because val accuracy counts all 4 class decisions per tile, while the challenge only checks the target class.
+- Recall is below precision for every checkpoint: most failures are missed targets, so the 0.5 threshold is too strict. The threshold sweep is the next lever.
+- `model_100ep` scores lowest despite its late val-accuracy gains, which so far favors selecting checkpoints by val loss.
+- `ms/chal` includes building and grading the challenge (about 3.6 ms, the baselines' cost), so model inference is about 10 ms per 9 tiles.
+
 ## Roadmap
 
 In planned order:
 
-1. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. Like `SyntheticTileSource`, it must keep no random state of its own and use only the `rng` passed to `get_tile`, so `compare_solvers` can share one source across envs. The data is the COCO crops from `prepare_dataset.py` (COCO annotations are CC BY 4.0; photos carry their Flickr licenses, recorded in `source_licenses.csv`, which is fine for academic use). Benchmark on `Image-Data/test` only, never on `train/`.
-2. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
-3. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>` (a thin wrapper over `run_benchmark`/`compare_solvers` that prints the `BenchmarkResult` rates), and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin. Its benchmark output feeds the README Results table.
-4. **Training improvements** (GPU training is verified and merged): decide the checkpoint-selection metric (val loss vs. val accuracy, see "Training runs"), background tiles in the dataset plus `pos_weight` in the loss, and a `main.py train` subcommand that forwards to `train.fit`. Don't add early stopping on val loss until the selection question is settled, since it would stop before the late accuracy gains.
-5. **`ModelSolver`** in `solvers.py` (and `make_solver("model")`): load with `model.load_checkpoint(path, expected_classes=...)`, batch the 9 tiles through `get_transform()` and `predict`, and return the sorted indices whose probability for `challenge.target` is at or above that class's threshold (`checkpoint["thresholds"]`, falling back to 0.5 while it is `None`). It may read only `tiles` and `target`. Class names must match `challenge.target` (the synthetic source uses `hydrant`, not `fire_hydrant`).
-6. **Thresholds**: sweep per-class thresholds on the val split to maximize full-challenge pass rate (not tile accuracy, since pass rate is roughly tile accuracy to the 9th power), and store them with the checkpoint.
-7. **Later**: fill the README Results table (oracle, random, noisy, and model on the same seed and test split), and a GUI option to highlight a solver's picks, for inspecting model mistakes.
+`FolderTileSource`, the `main.py` command line (`play`, `bench`), `ModelSolver`, and the first README test-split Results table are done (see Current state). Remaining:
+
+1. **Thresholds**: sweep per-class thresholds on the val split (`FolderTileSource("Image-Data/val")`, never `test/`) to maximize full-challenge pass rate (not tile accuracy, since pass rate is roughly tile accuracy to the 9th power), and store them with the checkpoint. Recall (0.899) is below precision (0.958) at 0.5, so expect lower thresholds to help. Then rerun the test benchmark and update the README Results table.
+2. **Training improvements**: settle the checkpoint-selection metric (the test benchmark so far favors val loss: `model_30ep` 61.1% vs. `model_100ep` 59.2%; recheck after the threshold sweep), background tiles in the dataset plus `pos_weight` in the loss, and a `main.py train` subcommand that forwards to `train.fit`. Don't add early stopping on val loss until the selection question is settled.
+3. **Confusion matrices** for the README test results (`bench` doesn't produce them; needs a small script or a `main.py` option).
+4. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
+5. **Later**: a GUI option to highlight a solver's picks, for inspecting model mistakes.
+
+Benchmark on `Image-Data/test` only, never on `train/`. The COCO data is fine for academic use (annotations CC BY 4.0; photos carry their Flickr licenses, recorded in `source_licenses.csv`).
 
 Update the Current state and Roadmap sections as items land.
 

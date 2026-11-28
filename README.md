@@ -57,9 +57,10 @@ All challenges are generated and graded locally, with no connection to any real 
 | Real image dataset (COCO 2017 crops, `prepare_dataset.py`) | Done |
 | Training loop (`train.py`) | Done (trained on the COCO crops on an RTX 4060) |
 | Training curve plots, including a live view (`Training/plot_history.py`) | Done |
-| Model solver and per-class thresholds | Planned |
-| Tile source for real images (challenges still use synthetic tiles) | Planned |
-| Command-line options in `main.py` | Planned |
+| Model solver (`ModelSolver`) | Done (61.1% pass rate on the test split) |
+| Per-class threshold tuning | Planned |
+| Tile source for real images (`FolderTileSource`) | Done |
+| Command-line options in `main.py` (`play`, `bench`) | Done |
 
 ---
 
@@ -181,7 +182,7 @@ Image-Data/
 
 Every image is a close crop of one object of its class, so the dataset has no background tiles (tiles with none of the classes). Real challenge grids do have them, so the current scores are likely optimistic.
 
-Challenges in the GUI and benchmark still use synthetic placeholder tiles (a solid color with the class name drawn on) until a tile source for the real images is built. `SyntheticTileDataset` uses the same tiles. They are for testing the code only: a model can tell them apart by color alone, so results on them say nothing about real images.
+Without `--data`, challenges in the GUI and benchmark use synthetic placeholder tiles (a solid color with the class name drawn on); `--data Image-Data/test` uses the real images through `FolderTileSource`. `SyntheticTileDataset` uses the same synthetic tiles. They are for testing the code only: a model can tell them apart by color alone, so results on them say nothing about real images.
 
 `TileDataset` (in `Library/dataset.py`) reads either one subfolder per class, as above, or a `labels.csv` in the split folder for tiles that show several classes or none of them, with `;` between labels:
 
@@ -427,16 +428,30 @@ Val accuracy tells a different story, though. In the 100-epoch run it is noisy (
 
 ### Challenges (test split)
 
-Still to be measured: this needs the model solver and a tile source for the real images. Results will be reported on the `test/` split, next to the oracle, random, and noisy baselines on the same seed. A rough guide: if every tile were 96.5% right on its own, a 9-tile challenge would pass about 0.965^9 ≈ 73% of the time, before tuning thresholds.
+1000 challenges built from `Image-Data/test`, seed 0, with every solver seeing the same challenges. The model is `model_30ep` (best val loss) with the default 0.5 threshold for every class (thresholds not tuned yet), run on an RTX 4060:
 
-| Metric                      | Value |
-|-----------------------------|-------|
-| Per-tile accuracy           | _TBD_ |
-| Precision / Recall          | _TBD_ |
-| Full-challenge pass rate    | _TBD_ |
-| Average inference time      | _TBD_ |
+```bash
+python main.py bench --data Image-Data/test -n 1000 --seed 0 --solver oracle random noisy model --checkpoint checkpoints/model_30ep.pt --device cuda
+```
 
-_Add confusion matrices and a discussion of the test results here._
+| Solver | Pass rate | Tile accuracy | Precision | Recall | ms per challenge |
+|--------|-----------|---------------|-----------|--------|------------------|
+| `oracle` | 100.0% | 1.000 | 1.000 | 1.000 | 3.59 |
+| `random` | 0.2% | 0.497 | 0.383 | 0.488 | 3.56 |
+| `noisy` (`p=0.9`) | 40.3% | 0.902 | 0.854 | 0.902 | 3.60 |
+| **`model`** | **61.1%** | **0.946** | **0.958** | **0.899** | **13.27** |
+
+The time per challenge covers building, solving, and grading it, so the model's own inference is about 9.7 ms per challenge of 9 tiles (13.27 ms minus the 3.6 ms the baselines take).
+
+The baselines land where the math predicts: random passes about 1/512 of the time, and noisy at `p=0.9` passes 40.3%, close to 0.9^9 ≈ 39%. The model passes 61.1% of challenges, well above the noisy baseline even though its tile accuracy is only about 4.4 points higher. That matches 0.946^9 ≈ 61%: since a challenge needs all 9 tiles right, small gains in tile accuracy make large gains in pass rate.
+
+Tile accuracy on test (94.6%) is below val accuracy (96.8%) because they measure different things. Val accuracy scores all 4 class decisions per tile, and most of those are easy "no" answers. The challenge score only checks each tile against the target class.
+
+Precision (0.958) is higher than recall (0.899), so most failures are target tiles the model missed rather than wrong tiles it picked. The 0.5 threshold is too strict for some classes. Tuning per-class thresholds on `val/` should raise the pass rate.
+
+These numbers are likely optimistic. Every test image is a close crop of one object, and the test set has no background tiles, which real challenge grids include.
+
+_Confusion matrices still to be added._
 
 ---
 

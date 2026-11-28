@@ -2,6 +2,16 @@ Expect about 100% for oracle
 Expect about 0.1% for random, 
 Expect about 38% for noisy
 
+
 oracle   pass=1.000 acc=1.000
 random   pass=0.001 acc=0.501
 noisy    pass=0.381 acc=0.898
+
+
+1000 challenges, seed 0, noisy p=0.9
+solver        n  pass rate  tile acc  precision  recall  ms/chal
+----------------------------------------------------------------
+oracle     1000     100.0%     1.000      1.000   1.000     3.59
+random     1000       0.2%     0.497      0.383   0.488     3.56
+noisy      1000      40.3%     0.902      0.854   0.902     3.60
+model      1000      61.1%     0.946      0.958   0.899    13.27
