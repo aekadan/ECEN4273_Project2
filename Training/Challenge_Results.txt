@@ -1,0 +1,7 @@
+Expect about 100% for oracle
+Expect about 0.1% for random, 
+Expect about 38% for noisy
+
+oracle   pass=1.000 acc=1.000
+random   pass=0.001 acc=0.501
+noisy    pass=0.381 acc=0.898

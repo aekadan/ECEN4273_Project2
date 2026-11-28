@@ -1,5 +1,7 @@
 pillow>=12.1,<14
 pytest>=9.2,<10
+# Used by Training/plot_history.py
+matplotlib>=3.8
 
 # PyTorch, used by Library/dataset.py and Library/model.py.
 # This installs the CPU build from PyPI on Windows. For NVIDIA GPU training,

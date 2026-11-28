@@ -17,7 +17,9 @@ Planned pipeline (see README.md):
 
 ## Current state
 
-The offline 3x3 challenge environment, GUI, and baseline solvers were built by hand and merged into `main` (PR #1, from `story/Create-Recaptcha-Environment`). They replace the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. The dataset loader landed in PR #2 (`feature/ai-dataset-erica`) and the benchmark in PR #3 (`story/Implement-Benchmark-Test`). The framework is PyTorch with a pretrained ResNet-18 (`Library/model.py`). The training loop (`Library/train.py`) and the checkpoint helpers in `model.py` are **implemented** on branch `story/Create-training-loop` (not yet merged), with tests in `Unit-Tests/test_train.py`. A CPU `--synthetic` run works end to end; it has not yet been run on the RTX 4060. There is no model solver and no real dataset yet, so the README's Results table is still _TBD_. Training targets an NVIDIA RTX 4060 (8 GB): CUDA when available, bf16 autocast, batch 128 (64 if it runs out of memory), and a `--device cpu` fallback for teammates without a GPU.
+The offline 3x3 challenge environment, GUI, and baseline solvers were built by hand and merged into `main` (PR #1, from `story/Create-Recaptcha-Environment`). They replace the earlier plan to apply `offline-captcha-env.patch`; treat that patch as a reference only. The dataset loader landed in PR #2 (`feature/ai-dataset-erica`) and the benchmark in PR #3 (`story/Implement-Benchmark-Test`). The checkpoint helpers in `model.py` (PR #6) and the training loop `Library/train.py` (PR #7, `story/Create-training-loop`) are merged, and PR #5 added the COCO dataset script `prepare_dataset.py`. The framework is PyTorch with a pretrained ResNet-18 (`Library/model.py`).
+
+A real dataset now exists (COCO crops, see `prepare_dataset.py` below), and the model has been trained on it on the RTX 4060 (CUDA, bf16, batch 128, about 4 s per epoch). The best val loss is about 0.10 (around epoch 6-8) with 96.0-96.8% val accuracy (per tile-class decision at 0.5). Longer runs overfit by the loss, yet a 100-epoch run reaches 97.0% val accuracy late; see "Training runs" below. There is still no model solver and no `FolderTileSource`, so challenges still use synthetic tiles and the README's test-split Results table is still _TBD_. `--device cpu` remains the fallback for teammates without a GPU.
 
 ### Done
 
@@ -70,18 +72,20 @@ The offline 3x3 challenge environment, GUI, and baseline solvers were built by h
     - `use_bf16(device)`: True only on CUDA with bf16 support; checks the device first so the GPU query never runs on CPU.
     - `train_one_epoch(...)`: autocast forward (bf16 when enabled), loss on float32 logits, scheduler steps every batch, batch-size-weighted mean loss.
     - `evaluate(...)`: `no_grad`, raw logits with `BCEWithLogitsLoss` (not `predict`), accuracy over every (tile, class) decision at `PREDICTION_THRESHOLD`.
-    - `save_history(path, history)`: JSON list of `asdict` per epoch; `history_path_for(out_path)` gives `<stem>_history.json` next to the checkpoint.
-    - `fit(config, verbose=True)`: saves the checkpoint (extra: `config` as a dict, `best_epoch`) whenever val loss improves, reloads the best at the end and resaves with `history`, writes `<name>_history.json`. Default output `checkpoints/model.pt` (gitignored). `EpochStats.lr` is the lr at the start of the epoch.
+    - `save_history(path, history)`: JSON list of `asdict` per epoch, written to `<name>.tmp` then swapped in with `os.replace` (retried briefly on Windows `PermissionError`) so a live reader never sees a partial file; `history_path_for(out_path)` gives `<stem>_history.json` next to the checkpoint.
+    - `fit(config, verbose=True)`: saves the checkpoint (extra: `config` as a dict, `best_epoch`) whenever val loss improves, rewrites `<name>_history.json` after **every** epoch (for live plotting, and so a stopped run keeps its history), and reloads the best at the end and resaves with `history`. Epoch 1 always overwrites an existing checkpoint at `out_path`, so give each run its own `--out`. Default output `checkpoints/model.pt` (gitignored). `EpochStats.lr` is the lr at the start of the epoch.
     - `parse_args(argv)`: `--data`/`--synthetic` mutually exclusive, plus `--epochs`, `--batch-size`, `--lr`, `--weight-decay`, `--device`, `--num-workers`, `--seed`, `--out`, `--no-pretrained`.
     - `main(argv)`: returns 0; on `torch.cuda.OutOfMemoryError` prints a `--batch-size 64` hint, and on `FileNotFoundError`/`ValueError` prints the error; both return 1.
   - bf16 autocast only on CUDA with bf16 support; no GradScaler.
+- `prepare_dataset.py` (repo root, by Erica): builds `Image-Data/` from COCO 2017. It expects `Image-Data/original/train2017.zip` and `Image-Data/original/instances_train2017.json`, crops each object's bounding box (non-crowd boxes only, at most one crop per source photo across all classes, `random.Random(42)`), and saves JPEGs (quality 95) for `hydrant` (COCO id 11), `bicycle` (2), `bus` (6), and `traffic_light` (10), 1000 per class split 700/150/150 into `train/`, `val/`, `test/`. It also writes `category_statistics.csv`, `source_licenses.csv` (per-photo Flickr license and URL), and `dataset_manifest.csv` (split, category, filename, source image and annotation ids, license) into `Image-Data/`. Class folder names match `DEFAULT_CLASSES`. Every crop is tightly centered on one object of its class, so there are no background tiles and crop sizes vary (the transforms resize to 224). It has no tests and does not follow the `Library/` import conventions; it is a one-off script.
+- `Training/plot_history.py`: standalone matplotlib script (not part of `Library`, no tests) that plots a history JSON as train/val loss and val accuracy with the best epoch marked. `python Training/plot_history.py --history checkpoints/<run>_history.json` saves `Training/<run>_history.png`; add `--watch` (and optionally `--interval`) in a second terminal during training for a live window that redraws each epoch and saves the PNG when closed. Needs `matplotlib` (in `requirements.txt`).
 - `main.py`: entry point. `main()` still just returns 0, and nothing launches the GUI, solvers, or benchmark yet.
 - `Unit-Tests/unit_test.py`: 28 pytest tests (counting each parametrized case) covering `main`, `CaptchaEnv` (`new_challenge`, `grade`), `SyntheticTileSource`, `CaptchaApp` (init, submit, load_challenge, toggle), the solvers (oracle, random, noisy, `make_solver`), and the benchmark (`TestBenchmark`: exact oracle and always-wrong scores, counts covering every tile, determinism, invalid `n`, the precision guard via an `EmptySolver` helper, and `compare_solvers` order and fairness). It uses one test class per module.
 - `Unit-Tests/test_dataset.py`: 7 tests for `dataset.py` (synthetic length, image shape, label shape and one-hot labels, reproducibility, multi-label CSV, background-image CSV). They are plain functions rather than a test class, and need `torch` installed.
-- `Unit-Tests/test_train.py`: 48 tests (counting parametrized cases) in one `TestTrain` class, covering every `train.py` function and the `model.py` checkpoint helpers: `TrainConfig` defaults, `EpochStats` ignoring `seconds`, `get_train_transform` (shape, normalized, random but seed-repeatable), `select_device` and `use_bf16` (GPU availability faked with `monkeypatch`, so they pass with or without a GPU), `set_seed`, `validate_config` (good config plus 10 bad values), `build_datasets` (synthetic, folders with val sharing train's classes, missing split, unknown val class), `build_loaders` (batch shapes, seeded shuffle vs. ordered val, `pin_memory`/workers options), `build_optimizer` (settings, cosine schedule values, weights update), `train_one_epoch`/`evaluate` (on tiny models, including exact values from a zero-logit `ZeroModel` and short-batch weighting), `save_history`, checkpoint round trip and rejection cases, `fit` (tiny synthetic run, reproducibility), `parse_args`, and `main`. Helpers: `make_config(tmp_path, **overrides)` (CPU, `num_workers=0`, `pretrained=False`, tiny synthetic sizes) and `make_image_folders(root, layout)` (writes a tiny folder dataset). `make_loader(inputs, labels, batch_size)` wraps tensors for loop tests. Optimizer and loop tests use `torch.nn.Linear` instead of ResNet-18; `fit` and checkpoint tests use ResNet-18 with `pretrained=False`. The file runs in about 6 s.
+- `Unit-Tests/test_train.py`: 49 tests (counting parametrized cases) in one `TestTrain` class, covering every `train.py` function and the `model.py` checkpoint helpers: `TrainConfig` defaults, `EpochStats` ignoring `seconds`, `get_train_transform` (shape, normalized, random but seed-repeatable), `select_device` and `use_bf16` (GPU availability faked with `monkeypatch`, so they pass with or without a GPU), `set_seed`, `validate_config` (good config plus 10 bad values), `build_datasets` (synthetic, folders with val sharing train's classes, missing split, unknown val class), `build_loaders` (batch shapes, seeded shuffle vs. ordered val, `pin_memory`/workers options), `build_optimizer` (settings, cosine schedule values, weights update), `train_one_epoch`/`evaluate` (on tiny models, including exact values from a zero-logit `ZeroModel` and short-batch weighting), `save_history`, checkpoint round trip and rejection cases, `fit` (tiny synthetic run, reproducibility), `parse_args`, and `main`. Helpers: `make_config(tmp_path, **overrides)` (CPU, `num_workers=0`, `pretrained=False`, tiny synthetic sizes) and `make_image_folders(root, layout)` (writes a tiny folder dataset). `make_loader(inputs, labels, batch_size)` wraps tensors for loop tests. Optimizer and loop tests use `torch.nn.Linear` instead of ResNet-18; `fit` and checkpoint tests use ResNet-18 with `pretrained=False`. The file runs in about 6 s.
 - `.vscode/settings.json`: pytest discovery on `Unit-Tests`, using `.venv`.
 - `pytest.ini`: puts the repository root on the import path (`pythonpath = .`) so plain `pytest` works as well as `python -m pytest`, and sets `testpaths = Unit-Tests`. It does not change the capture mode.
-- `requirements.txt` and `.gitignore`: dependencies (`pillow`, `pytest`, `torch`, `torchvision`) and exclusions for caches, `.venv/`, `Image-Data/`, and model weights.
+- `requirements.txt` and `.gitignore`: dependencies (`pillow`, `pytest`, `matplotlib`, `torch`, `torchvision`) and exclusions for caches, `.venv/`, `.pytest_cache/`, `Image-Data/`, `Training/*.png`, `checkpoints/`, and model weights.
 
 ### Known issues
 
@@ -90,20 +94,37 @@ The offline 3x3 challenge environment, GUI, and baseline solvers were built by h
   - It is not caused by the GUI code, Pillow, or Tk windows left open, and it doesn't happen outside pytest. A bare `Tk()` under pytest reproduces it, and repeated `CaptchaApp`s without pytest do not.
   - `python -m pytest Unit-Tests --capture=sys` avoids it (0 failures in 80 runs, against 6 in 40 with default capture) and still captures `print()`.
 - The GUI tests withdraw and destroy their Tk windows, but `destroy()` is skipped if an assert fails, so a shared fixture would still be useful. They also don't pass a `seed` yet.
-- No real dataset has been chosen. `Image-Data/` is untracked; on the Windows machines it exists but is empty, and on the Linux machine it doesn't exist.
+- `Image-Data/` is gitignored, so each machine has to build it with `prepare_dataset.py` (it needs the COCO 2017 train zip and annotations, about 19 GB). On the Linux machine it doesn't exist.
+- The dataset has no background tiles: every image is a tight crop of one of the 4 classes. Real challenge grids include tiles with none of the classes, so val accuracy here likely overstates real-world performance. Adding background crops (via a `labels.csv` with empty labels) would fix this and is when `pos_weight` becomes relevant.
 - On the Linux machine (Python 3.14 `.venv`), `tkinter` is not installed, so `Unit-Tests/unit_test.py` fails at collection (`ModuleNotFoundError` from `Library/gui.py`) and stops the whole run. Install the system Tk package (e.g. `python3-tk` for the matching Python) to fix it, or run `python -m pytest Unit-Tests --ignore=Unit-Tests/unit_test.py` for the other 55 tests.
 - Synthetic tiles are a class color with the class name drawn on, so a model learns them from color alone. Use them for wiring and tests only, never as reported results.
 - Some `__pycache__/*.pyc` files are tracked despite `.gitignore` (`git rm --cached` them).
-- The `origin/story/AI-model` remote branch (with a literal `origin/` prefix) is old and behind `main`.
+- The `origin/story/AI-model` remote branch (with a literal `origin/` prefix) was merged as PR #6 and can be deleted.
+- PR #6 committed `__pycache__/*.pyc` files, so they show as modified after every test run.
+
+### Training runs
+
+All on `Image-Data` with the defaults (pretrained, lr 3e-4, weight decay 1e-4, batch 128, seed 0) on the RTX 4060. Checkpoints and histories are in the gitignored `checkpoints/`; val numbers, not test.
+
+| Run | Best epoch | Best val loss | Val acc at best | Notes |
+|---|---|---|---|---|
+| `model_10ep` | 8 | 0.1033 | 96.54% | Val loss flat from epoch 3; train loss keeps falling |
+| `model_30ep` | 7 | 0.1014 | 96.83% | Val loss rises to about 0.125 after epoch 8 and stays there: clear overfitting |
+| `model_100ep` | 6 | 0.1040 | 96.00% | Val loss is noisy (0.13-0.20) after epoch 10 and settles at about 0.135; train loss reaches 0.0002. Val accuracy climbs after epoch 45 to 96.8-97.0%, peaking at 97.04% at epoch 60 |
+
+Takeaways:
+- Val loss is best at epoch 6-8 in every run; past that the model overfits by the loss.
+- Val **accuracy** keeps improving late in long runs (97.0% at epoch 60 vs. 96.0% at the best-loss epoch 6): the late model makes more correct decisions but is overconfident on its mistakes, which BCE punishes. Since pass rate depends on decisions, selecting the checkpoint by val loss (what `fit` does) may not maximize pass rate. Consider tracking or selecting by val accuracy (or by pass rate after the threshold sweep), or saving the last epoch as well, before picking a final model.
+- Lowering val loss itself needs more data, background tiles, or stronger regularization.
 
 ## Roadmap
 
 In planned order:
 
-1. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. Like `SyntheticTileSource`, it must keep no random state of its own and use only the `rng` passed to `get_tile`, so `compare_solvers` can share one source across envs. The dataset is not chosen yet; check its license fits academic use. Never benchmark on the training split.
+1. **`FolderTileSource`** in `tile_sources.py`: same interface as `SyntheticTileSource`. It reads `Image-Data/<split>/<class>/` using `IMAGE_EXT`, takes classes from the folder names, raises a clear error on empty class folders, and fills `Challenge.sources` with file paths. Like `SyntheticTileSource`, it must keep no random state of its own and use only the `rng` passed to `get_tile`, so `compare_solvers` can share one source across envs. The data is the COCO crops from `prepare_dataset.py` (COCO annotations are CC BY 4.0; photos carry their Flickr licenses, recorded in `source_licenses.csv`, which is fine for academic use). Benchmark on `Image-Data/test` only, never on `train/`.
 2. **`render_grid`**: finish it (paste the 9 tiles into one image) or remove it.
 3. **`main.py` command line** (`argparse`): `play` (launch `CaptchaApp`), `bench --solver <name> -n <count>` (a thin wrapper over `run_benchmark`/`compare_solvers` that prints the `BenchmarkResult` rates), and possibly `show`, with global `--seed` and `--data` (folder source vs. synthetic). Keep it thin. Its benchmark output feeds the README Results table.
-4. **Training on the GPU**: verify `python -m Library.train --synthetic --epochs 3` on the RTX 4060 (bf16, batch 128), then merge `story/Create-training-loop`. Later: `pos_weight` in the loss for class imbalance once a dataset with background tiles is chosen, and a `main.py train` subcommand that forwards to `train.fit`.
+4. **Training improvements** (GPU training is verified and merged): decide the checkpoint-selection metric (val loss vs. val accuracy, see "Training runs"), background tiles in the dataset plus `pos_weight` in the loss, and a `main.py train` subcommand that forwards to `train.fit`. Don't add early stopping on val loss until the selection question is settled, since it would stop before the late accuracy gains.
 5. **`ModelSolver`** in `solvers.py` (and `make_solver("model")`): load with `model.load_checkpoint(path, expected_classes=...)`, batch the 9 tiles through `get_transform()` and `predict`, and return the sorted indices whose probability for `challenge.target` is at or above that class's threshold (`checkpoint["thresholds"]`, falling back to 0.5 while it is `None`). It may read only `tiles` and `target`. Class names must match `challenge.target` (the synthetic source uses `hydrant`, not `fire_hydrant`).
 6. **Thresholds**: sweep per-class thresholds on the val split to maximize full-challenge pass rate (not tile accuracy, since pass rate is roughly tile accuracy to the 9th power), and store them with the checkpoint.
 7. **Later**: fill the README Results table (oracle, random, noisy, and model on the same seed and test split), and a GUI option to highlight a solver's picks, for inspecting model mistakes.
@@ -114,10 +135,13 @@ Update the Current state and Roadmap sections as items land.
 
 ```
 ECEN4273_Project2/
-├── Image-Data/     # train/ val/ test/, one subfolder per class (bicycle/, bus/, traffic_light/, ...)
-├── Library/        # package: environment, tile sources, GUI, solvers, benchmark, model, training
-├── Unit-Tests/     # pytest tests: unit_test.py (one Test class per module), test_dataset.py, test_train.py
-├── main.py         # command-line entry point
+├── Image-Data/          # gitignored; built by prepare_dataset.py: train/ val/ test/, one subfolder per class, plus CSV reports
+├── Library/             # package: environment, tile sources, GUI, solvers, benchmark, model, training
+├── Training/            # plot_history.py (tracked) and its PNGs (gitignored)
+├── Unit-Tests/          # pytest tests: unit_test.py (one Test class per module), test_dataset.py, test_train.py
+├── checkpoints/         # gitignored; <run>.pt and <run>_history.json from Library.train
+├── main.py              # command-line entry point
+├── prepare_dataset.py   # one-off COCO dataset builder
 └── README.md
 ```
 
@@ -160,7 +184,7 @@ python -m pytest Unit-Tests
 - Tests are plain pytest classes (`class TestMain:` with bare `assert`), not `unittest.TestCase`.
 - pytest only collects methods whose names **start with** `test_` (`test_submit`, not `submit_test`).
 - Training tests must stay CPU-only with `pretrained=False` and `num_workers=0` so they need no GPU and no download.
-- If pytest can't access its default temp folder (`PermissionError` on `pytest-of-<user>`), pass `--basetemp=<some writable folder>`.
+- If pytest can't access its default temp folder (`PermissionError` on `pytest-of-<user>`), pass `--basetemp=<some writable folder>`. On Zane's Windows machine this happens, and `--basetemp=.pytest_cache/tmp` works (the session scratchpad under `AppData\Local\Temp\claude` is not visible to the Store Python).
 - GUI tests create a real `Tk()`: withdraw it immediately and destroy it even when an assert fails (fixture or `try`/`finally`).
 - A `TclError` about `init.tcl`, `tk.tcl`, `tcl_findLibrary`, or `couldn't read file` is the known flake (see Known issues): rerun, or use `--capture=sys`.
 - Prefer the real `CaptchaEnv(SyntheticTileSource(), seed=...)` over hand-made mocks. `load_challenge` needs real PIL tiles and a `prompt`.
@@ -204,4 +228,4 @@ Match the existing file style:
 
 ## Git
 
-The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`. PRs #1 (environment), #2 (dataset loader), and #3 (benchmark) are merged into `main`.
+The repo is `aekadan/ecen4273_project2` on GitHub, owned by Aek. Work on a branch and open a pull request rather than pushing to `main`. PRs #1 (environment), #2 (dataset loader), #3 (benchmark), #5 (COCO dataset script), #6 (checkpoint helpers), and #7 (training loop) are merged into `main`.

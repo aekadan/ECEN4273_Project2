@@ -54,11 +54,12 @@ All challenges are generated and graded locally, with no connection to any real 
 | Benchmark runner for measuring pass rates | Done |
 | Dataset loader (`TileDataset`, `SyntheticTileDataset`) | Done |
 | ResNet-18 model factory, `predict`, and checkpoints | Done |
-| Training loop (`train.py`) | Done (proven on synthetic tiles) |
+| Real image dataset (COCO 2017 crops, `prepare_dataset.py`) | Done |
+| Training loop (`train.py`) | Done (trained on the COCO crops on an RTX 4060) |
+| Training curve plots, including a live view (`Training/plot_history.py`) | Done |
 | Model solver and per-class thresholds | Planned |
-| Tile source for real images | Planned |
+| Tile source for real images (challenges still use synthetic tiles) | Planned |
 | Command-line options in `main.py` | Planned |
-| Real image dataset | Not chosen |
 
 ---
 
@@ -66,7 +67,7 @@ All challenges are generated and graded locally, with no connection to any real 
 
 ```
 ECEN4273_Project2/
-├── Image-Data/             # Training, validation, and test images (empty for now)
+├── Image-Data/             # Not committed; built by prepare_dataset.py (train/, val/, test/)
 ├── Library/                # Project package
 │   ├── __init__.py
 │   ├── benchmark.py        # Runs solvers over many challenges and scores them
@@ -77,11 +78,15 @@ ECEN4273_Project2/
 │   ├── solvers.py          # Baseline solvers and make_solver
 │   ├── tile_sources.py     # Tile image sources (synthetic placeholder tiles for now)
 │   └── train.py            # Training loop (python -m Library.train)
+├── Training/
+│   └── plot_history.py     # Plots training curves, live or to a PNG
 ├── Unit-Tests/             # Unit tests
 │   ├── unit_test.py        # Environment, tile sources, GUI, solvers, benchmark
 │   ├── test_dataset.py     # Dataset loader
 │   └── test_train.py       # Training loop and checkpoints
+├── checkpoints/            # Not committed; trained models and their history JSON
 ├── main.py                 # Entry point for the project (no commands yet)
+├── prepare_dataset.py      # Builds Image-Data/ from COCO 2017
 ├── pytest.ini              # Test discovery settings
 ├── requirements.txt
 └── README.md
@@ -139,24 +144,46 @@ ECEN4273_Project2/
 
 ## Dataset
 
-No dataset has been chosen yet. For now, challenges and `SyntheticTileDataset` use synthetic placeholder tiles (a solid color with the class name drawn on) for four classes: `bus`, `bicycle`, `traffic_light`, and `hydrant`. These tiles are for testing the code only: a model can tell them apart by color alone, so results on them say nothing about real images.
+The model is trained on object crops from the [COCO 2017](https://cocodataset.org/) training set. `prepare_dataset.py` cuts out the bounding box of each chosen object and sorts the crops into class folders:
 
-`TileDataset` (in `Library/dataset.py`) already reads real images in either of two layouts. Image data goes in `Image-Data/`, which is not committed, with one subfolder per split:
+| Item          | Details |
+|---------------|---------|
+| Source        | COCO 2017 `train2017` photos and `instances_train2017.json` annotations |
+| Classes       | `bicycle`, `bus`, `hydrant` (COCO "fire hydrant"), `traffic_light` |
+| Total images  | 4,000 (1,000 per class) |
+| Image size    | Varies (a tight crop of each object's box); resized to 224x224 for the model |
+| Split         | 70% train / 15% val / 15% test: 700 / 150 / 150 per class |
+| Selection     | Non-crowd boxes, at most one crop per COCO photo, fixed seed (42) |
+| License       | COCO annotations are CC BY 4.0; each photo keeps its Flickr Creative Commons license, listed in `source_licenses.csv` |
+
+To rebuild it, put `train2017.zip` and `instances_train2017.json` from the COCO website in `Image-Data/original/` and run:
+
+```bash
+python prepare_dataset.py
+```
+
+This writes the class folders plus three reports: `dataset_manifest.csv` (where every crop came from), `source_licenses.csv`, and `category_statistics.csv`. `Image-Data/` is not committed, so each teammate builds it locally.
 
 ```
 Image-Data/
+├── original/           # COCO downloads (input)
 ├── train/
 │   ├── bicycle/
 │   ├── bus/
-│   ├── crosswalk/
-│   ├── fire_hydrant/
-│   ├── traffic_light/
-│   └── ...
+│   ├── hydrant/
+│   └── traffic_light/
 ├── val/
-└── test/
+├── test/
+├── category_statistics.csv
+├── dataset_manifest.csv
+└── source_licenses.csv
 ```
 
-For tiles that show several classes, or none of them (background tiles), put a `labels.csv` in the split folder instead, with `;` between labels:
+Every image is a close crop of one object of its class, so the dataset has no background tiles (tiles with none of the classes). Real challenge grids do have them, so the current scores are likely optimistic.
+
+Challenges in the GUI and benchmark still use synthetic placeholder tiles (a solid color with the class name drawn on) until a tile source for the real images is built. `SyntheticTileDataset` uses the same tiles. They are for testing the code only: a model can tell them apart by color alone, so results on them say nothing about real images.
+
+`TileDataset` (in `Library/dataset.py`) reads either one subfolder per class, as above, or a `labels.csv` in the split folder for tiles that show several classes or none of them, with `;` between labels:
 
 ```
 filename,labels
@@ -165,14 +192,6 @@ img_002.jpg,
 ```
 
 Train on `train/`, tune on `val/`, and benchmark only on `test/`.
-
-| Item          | Details |
-|---------------|---------|
-| Source        | _TBD_   |
-| Classes       | _TBD_   |
-| Total images  | _TBD_   |
-| Image size    | _TBD_   |
-| Split         | _TBD_ (e.g. 70% train / 15% val / 15% test) |
 
 ---
 
@@ -213,7 +232,7 @@ Run from the repository root:
 python -m Library.train --synthetic --epochs 3
 
 # Train on Image-Data/train, validating on Image-Data/val
-python -m Library.train --data Image-Data --epochs 10
+python -m Library.train --data Image-Data --epochs 10 --out checkpoints/model_10ep.pt
 
 # No GPU, or out of memory
 python -m Library.train --data Image-Data --device cpu --batch-size 64
@@ -226,19 +245,31 @@ python -m Library.train --data Image-Data --device cpu --batch-size 64
 | `--batch-size` | 128 | Use 64 if CUDA runs out of memory |
 | `--lr`, `--weight-decay` | 3e-4, 1e-4 | AdamW settings |
 | `--device` | `auto` | `auto`, `cuda`, or `cpu` |
-| `--workers` | 4 | DataLoader worker processes (0 loads in the main process) |
+| `--num-workers` | 4 | DataLoader worker processes (0 loads in the main process) |
 | `--seed` | 0 | Seed for weights init, shuffling, and augmentation |
 | `--out` | `checkpoints/model.pt` | Checkpoint path (the folder is gitignored) |
 | `--no-pretrained` | off | Start from random weights instead of ImageNet |
 
-Each epoch prints the train loss, val loss, val accuracy, and learning rate, with `*` when val loss improves. The checkpoint always holds the best epoch, and `model_history.json` next to it holds the per-epoch numbers for plotting. The first run downloads the ImageNet weights (about 45 MB).
+Each epoch prints the train loss, val loss, val accuracy, and learning rate, with `*` when val loss improves. The checkpoint always holds the best epoch, and `<name>_history.json` next to it (for example `model_10ep_history.json`) holds the per-epoch numbers. The history is rewritten after every epoch, so a run you stop early keeps it. The first run downloads the ImageNet weights (about 45 MB). On the RTX 4060 an epoch takes about 4 seconds.
+
+**Give each run its own `--out`.** The first epoch always saves over whatever checkpoint is at that path, so reusing a name replaces the earlier model.
+
+### Plotting training curves
+
+`Training/plot_history.py` plots train and val loss and val accuracy per epoch, with the best epoch marked. To watch a run live, start it in a second terminal while training:
+
+```bash
+python Training/plot_history.py --history checkpoints/model_10ep_history.json --watch
+```
+
+The window redraws after every epoch (it checks every 2 seconds; change with `--interval`), and saves `Training/model_10ep_history.png` when you close it. Without `--watch` it just saves the PNG. `--out` and `--title` change the file name and figure title.
 
 To load a trained model:
 
 ```python
 from Library.model import load_checkpoint, predict
 
-model, checkpoint = load_checkpoint("checkpoints/model.pt")
+model, checkpoint = load_checkpoint("checkpoints/model_10ep.pt")
 print(checkpoint["classes"], checkpoint["best_epoch"])
 ```
 
@@ -333,11 +364,31 @@ python -m pytest Unit-Tests
 python -m pytest Unit-Tests --capture=sys
 ```
 
+If pytest fails with a `PermissionError` on its temp folder (`pytest-of-<user>`), point it at a writable one with `--basetemp=.pytest_cache/tmp`.
+
 ---
 
 ## Results
 
-No model has been trained yet, so these are still to be measured. Results will be reported on the `test/` split of a real dataset, next to the oracle, random, and noisy baselines on the same seed.
+### Training (validation split)
+
+All runs use the default settings (ImageNet-pretrained ResNet-18, AdamW lr 3e-4, batch 128, seed 0) on an RTX 4060. Val accuracy counts each (tile, class) yes/no decision at a 0.5 threshold, so it is not a challenge pass rate.
+
+| Run | Epochs | Best epoch | Best val loss | Val accuracy at best epoch |
+|-----|--------|------------|---------------|----------------------------|
+| `model_10ep` | 10 | 8 | 0.103 | 96.5% |
+| `model_30ep` | 30 | 7 | 0.101 | 96.8% |
+| `model_100ep` | 100 | 6 | 0.104 | 96.0% |
+
+To see these curves, run `python Training/plot_history.py --history checkpoints/model_100ep_history.json` (or another run's history), which writes `Training/model_100ep_history.png`. Plot images are not committed.
+
+In every run, val loss is lowest around epoch 6-8, while train loss keeps falling toward zero (to 0.0002 by epoch 100). After that, val loss rises to about 0.125 (30 epochs) or 0.135-0.20 (100 epochs), which shows overfitting. The checkpoint keeps the best epoch by val loss, so the saved model is never the overfit one.
+
+Val accuracy tells a different story, though. In the 100-epoch run it is noisy (94-96%) until about epoch 45, then climbs and settles at 96.8-97.0%, peaking at 97.0% at epoch 60, while val loss stays at about 0.135. The late model makes more correct yes/no decisions, but is overconfident on the tiles it still gets wrong, and binary cross-entropy punishes that heavily. A challenge passes on decisions, not loss, so choosing the checkpoint by val loss may not give the best pass rate. The threshold sweep on `val/` will settle which epoch to keep. The difference is about 1 point of tile accuracy, which over 9 tiles is several points of pass rate.
+
+### Challenges (test split)
+
+Still to be measured: this needs the model solver and a tile source for the real images. Results will be reported on the `test/` split, next to the oracle, random, and noisy baselines on the same seed. A rough guide: if every tile were 96.5% right on its own, a 9-tile challenge would pass about 0.965^9 ≈ 73% of the time, before tuning thresholds.
 
 | Metric                      | Value |
 |-----------------------------|-------|
@@ -346,7 +397,7 @@ No model has been trained yet, so these are still to be measured. Results will b
 | Full-challenge pass rate    | _TBD_ |
 | Average inference time      | _TBD_ |
 
-_Add training curves, confusion matrices, and a discussion of the results here._
+_Add confusion matrices and a discussion of the test results here._
 
 ---
 

@@ -11,6 +11,9 @@ __pycache__/
 # Datasets
 Image-Data/
 
+# Training plots
+Training/*.png
+
 # Model weights and training runs
 checkpoints/
 *.pt

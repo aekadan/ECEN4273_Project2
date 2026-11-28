@@ -19,6 +19,7 @@
 #############################################################
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -62,6 +63,9 @@ SYNTHETIC_VAL_SEED_OFFSET = 10_000
 
 DEVICE_CHOICES = ("auto", "cuda", "cpu")
 PREDICTION_THRESHOLD = 0.5
+
+HISTORY_REPLACE_RETRIES = 20     # save_history swap attempts (Windows file locks)
+HISTORY_REPLACE_DELAY = 0.05     # seconds between attempts
 
 
 
@@ -391,7 +395,10 @@ def save_history(path, history):
     """
     FUNCTION NAME: save_history
 
-    DESCRIPTION: Writes the epoch history to JSON.
+    DESCRIPTION: Writes the epoch history to JSON. It writes a
+    temporary file and then swaps it in, so a reader (e.g.
+    Training/plot_history.py --watch) never sees a half-written
+    file.
 
     INPUTS: path (Path), history (list of EpochStats)
 
@@ -399,8 +406,19 @@ def save_history(path, history):
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as file:
+    temp_path = path.with_name(path.name + ".tmp")
+    with open(temp_path, "w", encoding="utf-8") as file:
         json.dump([asdict(stats) for stats in history], file, indent=2)
+    # On Windows the swap fails while a reader has the file open,
+    # so retry briefly before giving up.
+    for attempt in range(HISTORY_REPLACE_RETRIES):
+        try:
+            os.replace(temp_path, path)
+            return
+        except PermissionError:
+            if attempt == HISTORY_REPLACE_RETRIES - 1:
+                raise
+            time.sleep(HISTORY_REPLACE_DELAY)
 
 
 def history_path_for(out_path):
@@ -454,8 +472,10 @@ def fit(config, verbose=True):
         print(f"Training on {device} (bf16={bf16}) with {len(train_dataset)} train / "
               f"{len(val_dataset)} val tiles, classes={classes}")
 
-    # 6. Epoch loop; save a checkpoint whenever val loss improves
+    # 6. Epoch loop; save a checkpoint whenever val loss improves and
+    #    rewrite the history JSON every epoch so it can be watched live
     out_path = Path(config.out_path)
+    history_path = history_path_for(out_path)
     history = []
     best_val_loss = float("inf")
     best_epoch = None
@@ -479,6 +499,7 @@ def fit(config, verbose=True):
             best_epoch = epoch
             save_checkpoint(out_path, model, classes,
                             extra={"config": asdict(config), "best_epoch": best_epoch})
+        save_history(history_path, history)
 
         if verbose:
             marker = " *" if improved else ""
@@ -493,10 +514,6 @@ def fit(config, verbose=True):
                     extra={"config": asdict(config),
                            "best_epoch": best_epoch,
                            "history": history_dicts})
-
-    # 8. History JSON next to the checkpoint
-    history_path = history_path_for(out_path)
-    save_history(history_path, history)
 
     if verbose:
         print(f"Best epoch {best_epoch} (val_loss {best_val_loss:.4f}). "

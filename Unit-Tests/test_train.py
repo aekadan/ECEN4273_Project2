@@ -19,6 +19,7 @@
 
 import json
 import random
+from pathlib import Path
 
 import pytest
 import torch
@@ -743,6 +744,7 @@ class TestTrain:
         assert data[0] == {"epoch": 1, "train_loss": 0.5, "val_loss": 0.4,
                            "val_accuracy": 0.8, "lr": 1e-3, "seconds": 2.0}
         assert [train.EpochStats(**row) for row in data] == history
+        assert list(path.parent.iterdir()) == [path]   # no .tmp left behind
 
     def test_history_path_for(self):
         """
@@ -884,6 +886,35 @@ class TestTrain:
         first = train.fit(make_config(tmp_path, out_path=str(tmp_path / "a.pt")), verbose=False)
         second = train.fit(make_config(tmp_path, out_path=str(tmp_path / "b.pt")), verbose=False)
         assert first == second
+
+    def test_fit_writes_history_every_epoch(self, tmp_path, monkeypatch):
+        """
+        FUNCTION NAME: test_fit_writes_history_every_epoch
+
+        DESCRIPTION: fit rewrites the history JSON after each
+        epoch (so it can be watched live), each time with the
+        epochs finished so far.
+
+        INPUTS: tmp_path, monkeypatch (pytest fixtures)
+
+        OUTPUTS: None
+        """
+        config = make_config(tmp_path, epochs=3)
+        expected_path = train.history_path_for(config.out_path)
+        writes = []
+        real_save_history = train.save_history
+
+        def recording_save_history(path, history):
+            writes.append((Path(path), [stats.epoch for stats in history]))
+            real_save_history(path, history)
+
+        monkeypatch.setattr(train, "save_history", recording_save_history)
+
+        train.fit(config, verbose=False)
+
+        assert writes == [(expected_path, [1]),
+                          (expected_path, [1, 2]),
+                          (expected_path, [1, 2, 3])]
 
     def test_parse_args_defaults(self):
         """
