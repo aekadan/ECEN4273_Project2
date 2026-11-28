@@ -11,7 +11,6 @@ This project trains an image classification model to recognize the objects shown
 ## Table of Contents
 
 - [Project Overview](#project-overview)
-- [Project Status](#project-status)
 - [Repository Structure](#repository-structure)
 - [Getting Started](#getting-started)
 - [Dataset](#dataset)
@@ -31,36 +30,6 @@ Image CAPTCHAs ask a user to find every tile in a grid that contains a target ob
 2. **Classify.** Run each tile through a trained convolutional neural network (CNN) that predicts the object class.
 3. **Select.** Compare each prediction with the challenge's target class and keep the tiles whose confidence is above a threshold.
 4. **Evaluate.** Score the selection against the ground truth to measure the pass rate.
-
-### Goals
-
-- Build a labeled dataset of CAPTCHA-style image tiles.
-- Train a model that classifies tiles into the common CAPTCHA categories.
-- Reach a high per-tile accuracy and a high full-challenge pass rate.
-- Write up what the results mean for CAPTCHA security.
-
----
-
-## Project Status
-
-All challenges are generated and graded locally, with no connection to any real CAPTCHA service.
-
-| Component | Status |
-|-----------|--------|
-| Offline 3x3 challenge generator and grader | Done |
-| Synthetic placeholder tiles | Done |
-| Tkinter window for playing challenges by hand | Done |
-| Baseline solvers (oracle, random, noisy) | Done |
-| Benchmark runner for measuring pass rates | Done |
-| Dataset loader (`TileDataset`, `SyntheticTileDataset`) | Done |
-| ResNet-18 model factory, `predict`, and checkpoints | Done |
-| Real image dataset (COCO 2017 crops, `prepare_dataset.py`) | Done |
-| Training loop (`train.py`) | Done (trained on the COCO crops on an RTX 4060) |
-| Training curve plots, including a live view (`Training/plot_history.py`) | Done |
-| Model solver (`ModelSolver`) | Done (61.1% pass rate on the test split) |
-| Per-class threshold tuning | Planned |
-| Tile source for real images (`FolderTileSource`) | Done |
-| Command-line options in `main.py` (`play`, `bench`) | Done |
 
 ---
 
