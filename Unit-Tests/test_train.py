@@ -6,11 +6,9 @@
 #   CPU with tiny synthetic or temporary folder datasets, so
 #   no GPU or weight download is needed.
 #
-#   Covered so far: TrainConfig, EpochStats,
-#   get_train_transform, select_device, set_seed,
-#   validate_config, build_datasets. Add tests here as the
-#   remaining functions (build_loaders, fit, ...) and the
-#   checkpoint helpers in model.py are implemented.
+#   Covers every function in train.py (config, data,
+#   optimizer, training/eval loops, fit, the command line)
+#   and the checkpoint helpers in model.py.
 #
 #   Authors: Group 2
 #############################################################
@@ -19,11 +17,13 @@
 #   Libraries
 #############################################################
 
+import json
 import random
 
 import pytest
 import torch
 from PIL import Image
+from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms
 
 #############################################################
@@ -31,6 +31,7 @@ from torchvision import transforms
 #############################################################
 
 from Library import train
+from Library import model as model_lib
 from Library.dataset import IMAGE_SIZE
 
 #############################################################
@@ -91,6 +92,60 @@ def make_image_folders(root, layout):
             folder = root / split / class_name
             folder.mkdir(parents=True)
             Image.new("RGB", (50, 50), (120, 60, 30)).save(folder / "tile.png")
+
+def make_loader(inputs, labels, batch_size):
+    """
+    FUNCTION NAME: make_loader
+
+    DESCRIPTION: Wraps tensors in an unshuffled DataLoader
+    for testing the train/eval loops with tiny models.
+
+    INPUTS: inputs (tensor), labels (tensor), batch_size (int)
+
+    OUTPUTS: DataLoader
+    """
+    return DataLoader(TensorDataset(inputs, labels), batch_size=batch_size, shuffle=False)
+
+
+class ZeroModel(torch.nn.Module):
+    """
+    CLASS NAME: ZeroModel
+
+    DESCRIPTION: Always outputs logits of 0 (probability 0.5)
+    for num_classes classes, so losses and accuracy have
+    exact known values.
+
+    INPUTS: num_classes (int)
+
+    OUTPUTS: None
+    """
+
+    def __init__(self, num_classes):
+        """
+        FUNCTION NAME: __init__
+
+        DESCRIPTION: Stores the class count and a dummy
+        parameter.
+
+        INPUTS: num_classes (int)
+
+        OUTPUTS: None
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.dummy = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(self, inputs):
+        """
+        FUNCTION NAME: forward
+
+        DESCRIPTION: Returns all-zero logits.
+
+        INPUTS: inputs (tensor, batch first)
+
+        OUTPUTS: N x num_classes tensor
+        """
+        return torch.zeros(inputs.size(0), self.num_classes) + 0 * self.dummy
 
 #############################################################
 #   CLASSES
@@ -564,3 +619,369 @@ class TestTrain:
         monkeypatch.setattr(torch.cuda, "is_bf16_supported", fail)
         assert train.use_bf16(torch.device("cpu")) is False
 
+    def test_train_one_epoch_updates_and_steps(self, tmp_path):
+        """
+        FUNCTION NAME: test_train_one_epoch_updates_and_steps
+
+        DESCRIPTION: One epoch changes the weights, steps the
+        scheduler once per batch, returns a finite float, and
+        leaves the model in train mode.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        torch.manual_seed(0)
+        model = torch.nn.Linear(4, 3)
+        before = model.weight.detach().clone()
+        loader = make_loader(torch.randn(10, 4), torch.randint(0, 2, (10, 3)).float(), 4)
+        optimizer, scheduler = train.build_optimizer(
+            model, make_config(tmp_path, epochs=2), steps_per_epoch=len(loader))
+
+        loss = train.train_one_epoch(model, loader, torch.nn.BCEWithLogitsLoss(),
+                                     optimizer, scheduler, torch.device("cpu"), False)
+
+        assert isinstance(loss, float)
+        assert loss == loss and loss > 0
+        assert not torch.equal(model.weight, before)
+        assert scheduler.last_epoch == len(loader)
+        assert model.training
+
+    def test_train_one_epoch_loss_falls(self, tmp_path):
+        """
+        FUNCTION NAME: test_train_one_epoch_loss_falls
+
+        DESCRIPTION: On an easy problem, the mean training loss
+        goes down over several epochs.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        torch.manual_seed(0)
+        inputs = torch.randn(32, 4)
+        labels = (inputs[:, :2] > 0).float()
+        model = torch.nn.Linear(4, 2)
+        loader = make_loader(inputs, labels, 8)
+        optimizer, scheduler = train.build_optimizer(
+            model, make_config(tmp_path, epochs=20, lr=0.05), steps_per_epoch=len(loader))
+        loss_fn = torch.nn.BCEWithLogitsLoss()
+
+        losses = [train.train_one_epoch(model, loader, loss_fn, optimizer, scheduler,
+                                        torch.device("cpu"), False)
+                  for _ in range(20)]
+        assert losses[-1] < losses[0] / 2
+
+    def test_evaluate_exact_values(self):
+        """
+        FUNCTION NAME: test_evaluate_exact_values
+
+        DESCRIPTION: With all-zero logits the BCE loss is
+        log(2), and probability 0.5 counts as a positive, so
+        accuracy is the fraction of labels that are 1.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        labels = torch.tensor([[1., 0.], [1., 1.], [0., 0.], [1., 0.], [0., 1.]])
+        loader = make_loader(torch.randn(5, 4), labels, 2)
+        model = ZeroModel(2)
+
+        val_loss, val_accuracy = train.evaluate(model, loader, torch.nn.BCEWithLogitsLoss(),
+                                                torch.device("cpu"), False)
+
+        assert val_loss == pytest.approx(torch.log(torch.tensor(2.0)).item())
+        assert val_accuracy == pytest.approx(5 / 10)
+        assert not model.training
+
+    def test_evaluate_weights_short_batch(self):
+        """
+        FUNCTION NAME: test_evaluate_weights_short_batch
+
+        DESCRIPTION: The val loss from uneven batches (2, 2, 1)
+        equals the loss over the whole set at once, and
+        evaluate does not change the weights.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        torch.manual_seed(0)
+        inputs = torch.randn(5, 4)
+        labels = torch.randint(0, 2, (5, 3)).float()
+        model = torch.nn.Linear(4, 3)
+        before = model.weight.detach().clone()
+        loss_fn = torch.nn.BCEWithLogitsLoss()
+
+        val_loss, _ = train.evaluate(model, make_loader(inputs, labels, 2), loss_fn,
+                                     torch.device("cpu"), False)
+
+        with torch.no_grad():
+            expected = loss_fn(model(inputs), labels).item()
+        assert val_loss == pytest.approx(expected, rel=1e-5)
+        assert torch.equal(model.weight, before)
+
+    def test_save_history(self, tmp_path):
+        """
+        FUNCTION NAME: test_save_history
+
+        DESCRIPTION: The history is written as a JSON list of
+        dicts (one per epoch), creating missing folders.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        history = [train.EpochStats(1, 0.5, 0.4, 0.8, 1e-3, seconds=2.0),
+                   train.EpochStats(2, 0.3, 0.35, 0.9, 5e-4, seconds=2.5)]
+        path = tmp_path / "nested" / "run_history.json"
+
+        train.save_history(path, history)
+
+        data = json.loads(path.read_text())
+        assert data[0] == {"epoch": 1, "train_loss": 0.5, "val_loss": 0.4,
+                           "val_accuracy": 0.8, "lr": 1e-3, "seconds": 2.0}
+        assert [train.EpochStats(**row) for row in data] == history
+
+    def test_history_path_for(self):
+        """
+        FUNCTION NAME: test_history_path_for
+
+        DESCRIPTION: The history file sits next to the
+        checkpoint and is named <stem>_history.json.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        path = train.history_path_for("checkpoints/model.pt")
+        assert path.as_posix() == "checkpoints/model_history.json"
+
+    def test_checkpoint_round_trip(self, tmp_path):
+        """
+        FUNCTION NAME: test_checkpoint_round_trip
+
+        DESCRIPTION: A saved checkpoint reloads with the same
+        weights, classes, thresholds, and extra keys, in eval
+        mode.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        torch.manual_seed(0)
+        classes = ["bus", "bicycle", "hydrant"]
+        original = model_lib.create_model(num_classes=3, pretrained=False)
+        path = tmp_path / "sub" / "ckpt.pt"
+
+        model_lib.save_checkpoint(path, original, classes,
+                                  thresholds={"bus": 0.7},
+                                  extra={"best_epoch": 3, "history": [{"epoch": 1}]})
+        loaded, checkpoint = model_lib.load_checkpoint(path, expected_classes=classes)
+
+        assert checkpoint["arch"] == model_lib.MODEL_ARCH
+        assert checkpoint["classes"] == classes
+        assert checkpoint["thresholds"] == {"bus": 0.7}
+        assert checkpoint["best_epoch"] == 3
+        assert checkpoint["history"] == [{"epoch": 1}]
+        assert not loaded.training
+        for name, tensor in original.state_dict().items():
+            assert torch.equal(loaded.state_dict()[name], tensor)
+
+    def test_save_checkpoint_rejects_bad_input(self, tmp_path):
+        """
+        FUNCTION NAME: test_save_checkpoint_rejects_bad_input
+
+        DESCRIPTION: save_checkpoint raises ValueError for a
+        head/class-count mismatch, a threshold on an unknown
+        class, and extra keys that clash with the core keys.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        net = model_lib.create_model(num_classes=2, pretrained=False)
+        path = tmp_path / "ckpt.pt"
+
+        with pytest.raises(ValueError):
+            model_lib.save_checkpoint(path, net, ["a", "b", "c"])
+        with pytest.raises(ValueError):
+            model_lib.save_checkpoint(path, net, ["a", "b"], thresholds={"z": 0.5})
+        with pytest.raises(ValueError):
+            model_lib.save_checkpoint(path, net, ["a", "b"], extra={"classes": ["x"]})
+        assert not path.exists()
+
+    def test_load_checkpoint_rejects_mismatch(self, tmp_path):
+        """
+        FUNCTION NAME: test_load_checkpoint_rejects_mismatch
+
+        DESCRIPTION: load_checkpoint raises ValueError when the
+        expected classes differ in content or order, or the
+        arch is wrong.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        net = model_lib.create_model(num_classes=2, pretrained=False)
+        path = tmp_path / "ckpt.pt"
+        model_lib.save_checkpoint(path, net, ["bus", "hydrant"])
+
+        with pytest.raises(ValueError):
+            model_lib.load_checkpoint(path, expected_classes=["hydrant", "bus"])
+        with pytest.raises(ValueError):
+            model_lib.load_checkpoint(path, expected_classes=["bus", "bicycle"])
+
+        checkpoint = torch.load(path, weights_only=True)
+        checkpoint["arch"] = "resnet50"
+        torch.save(checkpoint, path)
+        with pytest.raises(ValueError):
+            model_lib.load_checkpoint(path)
+
+    def test_fit_synthetic(self, tmp_path):
+        """
+        FUNCTION NAME: test_fit_synthetic
+
+        DESCRIPTION: A tiny two-epoch synthetic run returns one
+        EpochStats per epoch and writes a loadable checkpoint
+        (with config, best epoch, and history) plus the
+        history JSON.
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        config = make_config(tmp_path, epochs=2)
+
+        history = train.fit(config, verbose=False)
+
+        assert [stats.epoch for stats in history] == [1, 2]
+        assert all(0.0 <= stats.val_accuracy <= 1.0 for stats in history)
+        assert history[0].lr == pytest.approx(config.lr)
+
+        _, checkpoint = model_lib.load_checkpoint(
+            config.out_path, expected_classes=["bus", "bicycle", "traffic_light", "hydrant"])
+        best = min(history, key=lambda stats: stats.val_loss)
+        assert checkpoint["best_epoch"] == best.epoch
+        assert checkpoint["config"]["epochs"] == 2
+        assert len(checkpoint["history"]) == 2
+
+        saved = json.loads((tmp_path / "model_history.json").read_text())
+        assert [train.EpochStats(**row) for row in saved] == history
+
+    def test_fit_is_reproducible(self, tmp_path):
+        """
+        FUNCTION NAME: test_fit_is_reproducible
+
+        DESCRIPTION: Two runs with the same seed give the same
+        history (timings are ignored by EpochStats ==).
+
+        INPUTS: tmp_path (pytest fixture)
+
+        OUTPUTS: None
+        """
+        first = train.fit(make_config(tmp_path, out_path=str(tmp_path / "a.pt")), verbose=False)
+        second = train.fit(make_config(tmp_path, out_path=str(tmp_path / "b.pt")), verbose=False)
+        assert first == second
+
+    def test_parse_args_defaults(self):
+        """
+        FUNCTION NAME: test_parse_args_defaults
+
+        DESCRIPTION: No flags gives the default TrainConfig.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        assert train.parse_args([]) == train.TrainConfig()
+
+    def test_parse_args_flags(self):
+        """
+        FUNCTION NAME: test_parse_args_flags
+
+        DESCRIPTION: Every flag maps onto its TrainConfig field.
+
+        INPUTS: None
+
+        OUTPUTS: None
+        """
+        config = train.parse_args([
+            "--data", "My-Data", "--epochs", "3", "--batch-size", "64",
+            "--lr", "0.001", "--weight-decay", "0", "--device", "cpu",
+            "--num-workers", "2", "--seed", "7", "--out", "runs/x.pt",
+            "--no-pretrained"])
+
+        assert config == train.TrainConfig(
+            data_dir="My-Data", synthetic=False, epochs=3, batch_size=64,
+            lr=0.001, weight_decay=0.0, device="cpu", num_workers=2, seed=7,
+            out_path="runs/x.pt", pretrained=False)
+        assert train.parse_args(["--synthetic"]).synthetic is True
+
+    @pytest.mark.parametrize("argv", [
+        ["--data", "Image-Data", "--synthetic"],
+        ["--device", "tpu"],
+    ])
+    def test_parse_args_rejects(self, argv):
+        """
+        FUNCTION NAME: test_parse_args_rejects
+
+        DESCRIPTION: --data with --synthetic, or an unknown
+        device, exits with an argparse error.
+
+        INPUTS: argv (list of str)
+
+        OUTPUTS: None
+        """
+        with pytest.raises(SystemExit):
+            train.parse_args(argv)
+
+    def test_main_out_of_memory(self, monkeypatch, capsys):
+        """
+        FUNCTION NAME: test_main_out_of_memory
+
+        DESCRIPTION: A CUDA out-of-memory error makes main
+        print a --batch-size 64 hint and return 1.
+
+        INPUTS: monkeypatch, capsys (pytest fixtures)
+
+        OUTPUTS: None
+        """
+        def out_of_memory(config, verbose=True):
+            raise torch.cuda.OutOfMemoryError("fake")
+
+        monkeypatch.setattr(train, "fit", out_of_memory)
+        assert train.main(["--synthetic"]) == 1
+        assert "--batch-size 64" in capsys.readouterr().err
+
+    def test_main_missing_data(self, tmp_path, capsys):
+        """
+        FUNCTION NAME: test_main_missing_data
+
+        DESCRIPTION: A data folder without train/ and val/
+        makes main print an error and return 1.
+
+        INPUTS: tmp_path (pytest fixture), capsys (pytest fixture)
+
+        OUTPUTS: None
+        """
+        assert train.main(["--data", str(tmp_path), "--device", "cpu"]) == 1
+        assert "does not exist" in capsys.readouterr().err
+
+    def test_main_success(self, monkeypatch):
+        """
+        FUNCTION NAME: test_main_success
+
+        DESCRIPTION: main returns 0 and passes the parsed
+        config to fit.
+
+        INPUTS: monkeypatch (pytest fixture)
+
+        OUTPUTS: None
+        """
+        seen = []
+        monkeypatch.setattr(train, "fit",
+                            lambda config, verbose=True: seen.append(config) or [])
+        assert train.main(["--synthetic", "--epochs", "2"]) == 0
+        assert seen[0].synthetic is True and seen[0].epochs == 2

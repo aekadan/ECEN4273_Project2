@@ -25,7 +25,6 @@ import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-from sympy import false
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -313,38 +312,79 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, device, bf16):
     """
     FUNCTION NAME: train_one_epoch
 
-    DESCRIPTION: One pass over the training data.
+    DESCRIPTION: One pass over the training data. The
+    scheduler steps after every batch, and the mean loss is
+    weighted by batch size so a short last batch doesn't
+    skew it.
 
     INPUTS: model, loader, loss_fn, optimizer, scheduler,
     device, bf16 (bool)
 
     OUTPUTS: mean training loss (float)
     """
-    # TODO: model.train(), then loop over batches.
-    # Hint: run the forward pass and loss inside
-    #       torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16).
-    # Hint: scheduler.step() goes after every optimizer.step(), not once per epoch.
-    # Hint: weight each batch loss by its size so a short last batch
-    #       doesn't skew the mean. bf16 needs no GradScaler.
-    pass
+    model.train()
+    total_loss = 0.0
+    total_samples = 0
+
+    for images, labels in loader:
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=bf16):
+            logits = model(images)
+        # Compute the loss in float32 for numerical stability
+        loss = loss_fn(logits.float(), labels)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+        batch_size = images.size(0)
+        total_loss += loss.item() * batch_size
+        total_samples += batch_size
+
+    return total_loss / max(total_samples, 1)
 
 
 def evaluate(model, loader, loss_fn, device, bf16):
     """
     FUNCTION NAME: evaluate
 
-    DESCRIPTION: Val loss and per tile-class accuracy.
+    DESCRIPTION: Val loss and per tile-class accuracy. Uses
+    raw logits (not model.predict) because BCEWithLogitsLoss
+    expects logits.
 
     INPUTS: model, loader, loss_fn, device, bf16 (bool)
 
     OUTPUTS: (val_loss, val_accuracy)
     """
-    # TODO: model.eval() and torch.no_grad().
-    # Hint: use raw logits, not model.predict(), because
-    #       BCEWithLogitsLoss expects logits.
-    # Hint: accuracy = (sigmoid(logits) >= PREDICTION_THRESHOLD) == labels,
-    #       averaged over every sample and class.
-    pass
+    model.eval()
+    total_loss = 0.0
+    total_samples = 0
+    correct = 0
+    total_decisions = 0
+
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=bf16):
+                logits = model(images)
+            logits = logits.float()
+            loss = loss_fn(logits, labels)
+
+            batch_size = images.size(0)
+            total_loss += loss.item() * batch_size
+            total_samples += batch_size
+
+            predictions = torch.sigmoid(logits) >= PREDICTION_THRESHOLD
+            correct += (predictions == labels.bool()).sum().item()
+            total_decisions += labels.numel()
+
+    val_loss = total_loss / max(total_samples, 1)
+    val_accuracy = correct / max(total_decisions, 1)
+    return val_loss, val_accuracy
 
 
 def save_history(path, history):
@@ -357,8 +397,26 @@ def save_history(path, history):
 
     OUTPUTS: None
     """
-    # TODO: json.dump([asdict(s) for s in history], ...)
-    pass
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump([asdict(stats) for stats in history], file, indent=2)
+
+
+def history_path_for(out_path):
+    """
+    FUNCTION NAME: history_path_for
+
+    DESCRIPTION: The history file that goes next to a
+    checkpoint: checkpoints/model.pt ->
+    checkpoints/model_history.json.
+
+    INPUTS: out_path (str or Path)
+
+    OUTPUTS: Path
+    """
+    out_path = Path(out_path)
+    return out_path.with_name(f"{out_path.stem}_history.json")
 
 
 def fit(config, verbose=True):
@@ -372,20 +430,79 @@ def fit(config, verbose=True):
 
     OUTPUTS: list of EpochStats
     """
-    # TODO 1: validate_config, set_seed, select_device
-    # TODO 2: build_datasets, build_loaders
-    # TODO 3: create_model(num_classes=len(train.classes),
-    #         pretrained=config.pretrained).to(device)
-    #         (don't rely on the default of 8)
-    # TODO 4: loss_fn = nn.BCEWithLogitsLoss()   (multi-label)
-    # TODO 5: build_optimizer
-    # TODO 6: loop over epochs: time it, train, evaluate, append EpochStats.
-    #         Whenever val_loss improves, call save_checkpoint(...).
-    # TODO 7: after the loop, reload the best weights with
-    #         load_checkpoint and save again with the full history in
-    #         extra (plain dicts only, since it loads with weights_only=True).
-    # TODO 8: save_history next to the checkpoint, then return the history.
-    pass
+    # 1. Check settings, seed everything, pick the device
+    validate_config(config)
+    set_seed(config.seed)
+    device = select_device(config.device)
+    bf16 = use_bf16(device)
+
+    # 2. Data
+    train_dataset, val_dataset = build_datasets(config)
+    if len(train_dataset) == 0 or len(val_dataset) == 0:
+        raise ValueError("Train and val datasets must both contain images.")
+    train_loader, val_loader = build_loaders(config, train_dataset, val_dataset, device)
+    classes = list(train_dataset.classes)
+
+    # 3. Model with one output per class
+    model = create_model(num_classes=len(classes), pretrained=config.pretrained).to(device)
+
+    # 4-5. Multi-label loss, optimizer, and schedule
+    loss_fn = nn.BCEWithLogitsLoss()
+    optimizer, scheduler = build_optimizer(model, config, len(train_loader))
+
+    if verbose:
+        print(f"Training on {device} (bf16={bf16}) with {len(train_dataset)} train / "
+              f"{len(val_dataset)} val tiles, classes={classes}")
+
+    # 6. Epoch loop; save a checkpoint whenever val loss improves
+    out_path = Path(config.out_path)
+    history = []
+    best_val_loss = float("inf")
+    best_epoch = None
+
+    for epoch in range(1, config.epochs + 1):
+        start = time.perf_counter()
+        lr = optimizer.param_groups[0]["lr"]
+        train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, scheduler, device, bf16)
+        val_loss, val_accuracy = evaluate(model, val_loader, loss_fn, device, bf16)
+        stats = EpochStats(epoch=epoch,
+                           train_loss=train_loss,
+                           val_loss=val_loss,
+                           val_accuracy=val_accuracy,
+                           lr=lr,
+                           seconds=time.perf_counter() - start)
+        history.append(stats)
+
+        improved = val_loss < best_val_loss
+        if improved:
+            best_val_loss = val_loss
+            best_epoch = epoch
+            save_checkpoint(out_path, model, classes,
+                            extra={"config": asdict(config), "best_epoch": best_epoch})
+
+        if verbose:
+            marker = " *" if improved else ""
+            print(f"epoch {epoch:3d}/{config.epochs}  train_loss {train_loss:.4f}  "
+                  f"val_loss {val_loss:.4f}  val_acc {val_accuracy:.4f}  "
+                  f"lr {lr:.2e}  {stats.seconds:.1f}s{marker}")
+
+    # 7. Reload the best weights and resave with the full history
+    best_model, _ = load_checkpoint(out_path, expected_classes=classes)
+    history_dicts = [asdict(stats) for stats in history]
+    save_checkpoint(out_path, best_model, classes,
+                    extra={"config": asdict(config),
+                           "best_epoch": best_epoch,
+                           "history": history_dicts})
+
+    # 8. History JSON next to the checkpoint
+    history_path = history_path_for(out_path)
+    save_history(history_path, history)
+
+    if verbose:
+        print(f"Best epoch {best_epoch} (val_loss {best_val_loss:.4f}). "
+              f"Saved {out_path} and {history_path}")
+
+    return history
 
 
 def parse_args(argv=None):
@@ -398,11 +515,41 @@ def parse_args(argv=None):
 
     OUTPUTS: TrainConfig
     """
-    # TODO: --data and --synthetic in a mutually exclusive group.
-    # TODO: --epochs, --batch-size, --lr, --weight-decay,
-    #       --device (choices=DEVICE_CHOICES), --num-workers,
-    #       --seed, --out, --no-pretrained
-    pass
+    defaults = TrainConfig()
+    parser = argparse.ArgumentParser(
+        prog="python -m Library.train",
+        description="Fine-tune ResNet-18 on CAPTCHA tiles.",
+    )
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--data", default=None,
+                        help=f"dataset folder holding train/ and val/ (default: {defaults.data_dir})")
+    source.add_argument("--synthetic", action="store_true",
+                        help="train on generated placeholder tiles (wiring test only)")
+    parser.add_argument("--epochs", type=int, default=defaults.epochs)
+    parser.add_argument("--batch-size", type=int, default=defaults.batch_size,
+                        help="use 64 if the GPU runs out of memory")
+    parser.add_argument("--lr", type=float, default=defaults.lr)
+    parser.add_argument("--weight-decay", type=float, default=defaults.weight_decay)
+    parser.add_argument("--device", choices=DEVICE_CHOICES, default=defaults.device)
+    parser.add_argument("--num-workers", type=int, default=defaults.num_workers)
+    parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument("--out", default=defaults.out_path,
+                        help="checkpoint path; the history JSON is written next to it")
+    parser.add_argument("--no-pretrained", action="store_true",
+                        help="start from random weights instead of ImageNet")
+    args = parser.parse_args(argv)
+
+    return TrainConfig(data_dir=args.data if args.data is not None else defaults.data_dir,
+                       synthetic=args.synthetic,
+                       epochs=args.epochs,
+                       batch_size=args.batch_size,
+                       lr=args.lr,
+                       weight_decay=args.weight_decay,
+                       device=args.device,
+                       num_workers=args.num_workers,
+                       seed=args.seed,
+                       out_path=args.out,
+                       pretrained=not args.no_pretrained)
 
 
 def main(argv=None):
@@ -415,10 +562,17 @@ def main(argv=None):
 
     OUTPUTS: exit code (int)
     """
-    # TODO: parse_args, then fit.
-    # Hint: catch torch.cuda.OutOfMemoryError, print a suggestion to
-    #       use --batch-size 64, and return 1. Return 0 on success.
-    pass
+    config = parse_args(argv)
+    try:
+        fit(config)
+    except torch.cuda.OutOfMemoryError:
+        print(f"Out of GPU memory at batch size {config.batch_size}. "
+              "Try again with --batch-size 64.", file=sys.stderr)
+        return 1
+    except (FileNotFoundError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
