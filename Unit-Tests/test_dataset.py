@@ -199,3 +199,73 @@ def test_background_image_csv(tmp_path):
 
     assert image.shape == (3, 224, 224)
     assert labels.tolist() == [0.0, 0.0, 0.0, 0.0]
+def test_tile_dataset_custom_transform(tmp_path):
+    """
+    FUNCTION NAME: test_tile_dataset_custom_transform
+
+    DESCRIPTION: This function verifies that the dataset
+    correctly applies a custom image transformation to
+    images loaded from a CSV file.
+
+    INPUTS: tmp_path
+
+    OUTPUTS: None
+    """
+    from PIL import Image
+    from Library.dataset import TileDataset
+
+    image_path = tmp_path / "tile1.png"
+    Image.new("RGB", (100, 100), color="blue").save(image_path)
+
+    csv_path = tmp_path / "labels.csv"
+    csv_path.write_text(
+        "filename,labels\n"
+        "tile1.png,bus\n",
+        encoding="utf-8"
+    )
+
+    def custom_transform(image):
+        return torch.ones((3, 128, 128))
+
+    dataset = TileDataset(
+        str(tmp_path),
+        classes=["bus", "bicycle", "traffic_light", "hydrant"],
+        transform=custom_transform
+    )
+
+    image, labels = dataset[0]
+
+    assert image.shape == (3, 128, 128)
+    assert image.dtype == torch.float32
+    assert torch.all(image == 1)
+    assert labels.tolist() == [1.0, 0.0, 0.0, 0.0]
+
+
+def test_synthetic_dataset_custom_transform():
+    """
+    FUNCTION NAME: test_synthetic_dataset_custom_transform
+
+    DESCRIPTION: This function verifies that the synthetic
+    dataset correctly applies a custom image transformation
+    while preserving the correct class label.
+
+    INPUTS: None
+
+    OUTPUTS: None
+    """
+    def custom_transform(image):
+        return torch.ones((3, 128, 128))
+
+    dataset = SyntheticTileDataset(
+        num_samples=9,
+        seed=42,
+        transform=custom_transform
+    )
+
+    image, labels = dataset[0]
+
+    assert image.shape == (3, 128, 128)
+    assert image.dtype == torch.float32
+    assert torch.all(image == 1)
+    assert labels.shape == (4,)
+    assert labels.tolist() == [1.0, 0.0, 0.0, 0.0]
