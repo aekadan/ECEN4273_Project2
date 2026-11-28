@@ -55,10 +55,11 @@ All challenges are generated and graded locally, with no connection to any real 
 | Dataset loader (`TileDataset`, `SyntheticTileDataset`) | Done |
 | ResNet-18 model factory, `predict`, and checkpoints | Done |
 | Training loop (`train.py`) | Done (proven on synthetic tiles) |
-| Model solver and per-class thresholds | Planned |
-| Tile source for real images | Planned |
-| Command-line options in `main.py` | Planned |
-| Real image dataset | Not chosen |
+| Real-image tile source (`FolderTileSource`) | Done |
+| Model solver (`ModelSolver`) | Done |
+| Command line (`main.py play`, `main.py bench`) | Done |
+| Real image dataset | Done (bicycle, bus, hydrant, traffic light) |
+| Per-class threshold tuning | Planned |
 
 ---
 
@@ -66,7 +67,7 @@ All challenges are generated and graded locally, with no connection to any real 
 
 ```
 ECEN4273_Project2/
-├── Image-Data/             # Training, validation, and test images (empty for now)
+├── Image-Data/             # train/ val/ test/ images (not committed)
 ├── Library/                # Project package
 │   ├── __init__.py
 │   ├── benchmark.py        # Runs solvers over many challenges and scores them
@@ -74,14 +75,16 @@ ECEN4273_Project2/
 │   ├── dataset.py          # PyTorch datasets: image folders, labels.csv, synthetic tiles
 │   ├── gui.py              # Tkinter window for playing challenges by hand
 │   ├── model.py            # ResNet-18 classifier, predict, save/load checkpoints
-│   ├── solvers.py          # Baseline solvers and make_solver
-│   ├── tile_sources.py     # Tile image sources (synthetic placeholder tiles for now)
+│   ├── solvers.py          # Baseline solvers, ModelSolver, and make_solver
+│   ├── tile_sources.py     # Tile sources: synthetic placeholders and real image folders
 │   └── train.py            # Training loop (python -m Library.train)
 ├── Unit-Tests/             # Unit tests
 │   ├── unit_test.py        # Environment, tile sources, GUI, solvers, benchmark
 │   ├── test_dataset.py     # Dataset loader
-│   └── test_train.py       # Training loop and checkpoints
-├── main.py                 # Entry point for the project (no commands yet)
+│   ├── test_train.py       # Training loop and checkpoints
+│   ├── test_model_solver.py # FolderTileSource and ModelSolver
+│   └── test_main.py        # Command line
+├── main.py                 # Command line: play, bench
 ├── pytest.ini              # Test discovery settings
 ├── requirements.txt
 └── README.md
@@ -168,11 +171,11 @@ Train on `train/`, tune on `val/`, and benchmark only on `test/`.
 
 | Item          | Details |
 |---------------|---------|
-| Source        | _TBD_   |
-| Classes       | _TBD_   |
-| Total images  | _TBD_   |
-| Image size    | _TBD_   |
-| Split         | _TBD_ (e.g. 70% train / 15% val / 15% test) |
+| Source        | Object crops from COCO images; see `Image-Data/dataset_manifest.csv` and `Image-Data/source_licenses.csv` |
+| Classes       | `bicycle`, `bus`, `hydrant`, `traffic_light` |
+| Total images  | 4,000 (1,000 per class) |
+| Image size    | Varies; resized to 224x224 for the model and 100x100 for challenge tiles |
+| Split         | 700 train / 150 val / 150 test per class (70% / 15% / 15%) |
 
 ---
 
@@ -226,7 +229,7 @@ python -m Library.train --data Image-Data --device cpu --batch-size 64
 | `--batch-size` | 128 | Use 64 if CUDA runs out of memory |
 | `--lr`, `--weight-decay` | 3e-4, 1e-4 | AdamW settings |
 | `--device` | `auto` | `auto`, `cuda`, or `cpu` |
-| `--workers` | 4 | DataLoader worker processes (0 loads in the main process) |
+| `--num-workers` | 4 | DataLoader worker processes (0 loads in the main process) |
 | `--seed` | 0 | Seed for weights init, shuffling, and augmentation |
 | `--out` | `checkpoints/model.pt` | Checkpoint path (the folder is gitignored) |
 | `--no-pretrained` | off | Start from random weights instead of ImageNet |
@@ -246,16 +249,46 @@ print(checkpoint["classes"], checkpoint["best_epoch"])
 
 ## Usage
 
-`main.py` has no commands yet, so for now the project is used from Python. Run everything from the repository root, since `Library` is imported as a package.
+Run everything from the repository root, since `Library` is imported as a package.
 
-### Play challenges by hand
+### Command line
+
+```bash
+# Play challenges by hand (synthetic tiles, or real test images)
+python main.py play
+python main.py play --data Image-Data/test
+
+# Compare the baselines on real test images
+python main.py bench --data Image-Data/test -n 1000
+
+# Add the trained model (checkpoints/model.pt by default)
+python main.py bench --data Image-Data/test -n 1000 --solver oracle random noisy model
+```
+
+```
+solver        n  pass rate  tile acc  precision  recall  ms/chal
+----------------------------------------------------------------
+oracle     1000     100.0%     1.000      1.000   1.000     ...
+```
+
+| Option | Commands | Default | Meaning |
+|--------|----------|---------|---------|
+| `--data` | both | synthetic tiles | Split folder with one subfolder per class. Benchmark on `Image-Data/test` only |
+| `--seed` | both | 0 | Challenge seed; every solver sees the same challenges |
+| `--solver` | bench | `oracle random noisy` | Any of `oracle`, `random`, `noisy`, `model` |
+| `-n` | bench | 1000 | Challenges per solver |
+| `--p` | bench | 0.9 | Per-tile accuracy of the noisy solver |
+| `--checkpoint` | bench | `checkpoints/model.pt` | Model for `--solver model` |
+| `--device` | bench | `auto` | `auto`, `cuda`, or `cpu` for the model |
+
+### Play challenges by hand from Python
 
 ```python
 from Library.captcha_env import CaptchaEnv
 from Library.gui import CaptchaApp
-from Library.tile_sources import SyntheticTileSource
+from Library.tile_sources import FolderTileSource
 
-env = CaptchaEnv(SyntheticTileSource())
+env = CaptchaEnv(FolderTileSource("Image-Data/test"))
 CaptchaApp(env).run()
 ```
 
@@ -283,6 +316,17 @@ A challenge passes only if all 9 tiles are right. These baselines set the refere
 | `oracle` | Returns the correct answer | 100% |
 | `random` | Selects each tile on a coin flip | About 0.2% (1/512) |
 | `noisy` | Gets each tile right with probability `p` | About `p`^9 (39% at `p=0.9`) |
+| `model` | Selects tiles whose model probability for the target is at or above the class threshold (0.5 until tuned) | Measured below |
+
+The model solver only looks at the tiles and the target, never the answer:
+
+```python
+from Library.solvers import ModelSolver
+from Library.tile_sources import FolderTileSource
+
+source = FolderTileSource("Image-Data/test")
+solver = ModelSolver("checkpoints/model.pt", device="cuda", required_classes=source.classes)
+```
 
 ### Benchmark solvers
 
@@ -315,13 +359,11 @@ To benchmark a single solver, use `run_benchmark(env, solver, n)` with a seeded 
 | `recall` | Of the target tiles, the fraction that were selected |
 | `seconds_per_challenge` | Average time to solve and grade one challenge |
 
-_Add the command-line options for benchmarking, training, evaluation, and inference here as they are built._
-
 ---
 
 ## Testing
 
-Unit tests are in `Unit-Tests/`: `unit_test.py` covers the environment, tile sources, GUI, solvers, and benchmark, `test_dataset.py` covers the dataset loader, and `test_train.py` covers the training loop and checkpoints (both need PyTorch installed; the training tests run on the CPU with tiny synthetic data, so they need no GPU or download). To run them:
+Unit tests are in `Unit-Tests/`: `unit_test.py` covers the environment, tile sources, GUI, solvers, and benchmark, `test_dataset.py` covers the dataset loader, `test_train.py` covers the training loop and checkpoints, `test_model_solver.py` covers `FolderTileSource` and `ModelSolver`, and `test_main.py` covers the command line (these four need PyTorch installed but not tkinter; the training tests run on the CPU with tiny synthetic data, so they need no GPU or download). To run them:
 
 ```bash
 python -m pytest Unit-Tests
@@ -337,7 +379,7 @@ python -m pytest Unit-Tests --capture=sys
 
 ## Results
 
-No model has been trained yet, so these are still to be measured. Results will be reported on the `test/` split of a real dataset, next to the oracle, random, and noisy baselines on the same seed.
+No model has been trained on the GPU yet, so these are still to be measured with `python main.py bench --data Image-Data/test --solver oracle random noisy model`, next to the baselines on the same seed.
 
 | Metric                      | Value |
 |-----------------------------|-------|
