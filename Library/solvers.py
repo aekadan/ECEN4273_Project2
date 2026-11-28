@@ -13,15 +13,20 @@
 #############################################################
 import random
 
+import torch
+
 #############################################################
 #   Files Import
 #############################################################
 from .captcha_env import NUM_TILES
+from .dataset import get_transform
+from .model import load_checkpoint, predict
 
 #############################################################
 #   Global Constants
 #############################################################
 PROBABILITY = 0.5
+DEFAULT_THRESHOLD = 0.5
 
 #############################################################
 #   CLASSES
@@ -183,16 +188,100 @@ class NoisySolver(Solver):
         return selected
 
 
+class ModelSolver(Solver):
+    """
+    CLASS NAME: ModelSolver
+
+    DESCRIPTION: This solver runs the 9 tiles through a trained
+    checkpoint and selects every tile whose probability for the target
+    class is at or above that class's threshold. It only reads
+    challenge.tiles and challenge.target, never the answer or labels.
+
+    INPUTS: checkpoint_path, device, required_classes, thresholds
+
+    OUTPUTS: None
+    """
+    def __init__(self, checkpoint_path, device="cpu", required_classes=None, thresholds=None):
+        """
+        FUNCTION NAME: __init__
+
+        DESCRIPTION: This loads the checkpoint, checks it knows every
+        required class, and sets up the per-class thresholds (explicit
+        thresholds, then the checkpoint's, then DEFAULT_THRESHOLD).
+
+        INPUTS: checkpoint_path (str or Path), device (str or
+        torch.device), required_classes (list of str the challenges can
+        target, e.g. source.classes, or None), thresholds (dict of
+        class -> float overriding the checkpoint's, or None)
+
+        OUTPUTS: None
+        """
+        super().__init__("model")
+        self.device = torch.device(device)
+        self.model, self.checkpoint = load_checkpoint(checkpoint_path, device=self.device)
+        self.classes = list(self.checkpoint["classes"])
+
+        if required_classes is not None:
+            missing = [label for label in required_classes if label not in self.classes]
+            if missing:
+                raise ValueError(f"Checkpoint classes {self.classes} are missing {missing}.")
+
+        self.thresholds = {label: DEFAULT_THRESHOLD for label in self.classes}
+        for override in (self.checkpoint.get("thresholds"), thresholds):
+            if override:
+                unknown = [label for label in override if label not in self.classes]
+                if unknown:
+                    raise ValueError(f"Thresholds name unknown classes: {unknown}")
+                self.thresholds.update({label: float(value) for label, value in override.items()})
+
+        self.transform = get_transform()
+
+    def tile_probabilities(self, tiles):
+        """
+        FUNCTION NAME: tile_probabilities
+
+        DESCRIPTION: This returns the model's probability for every class
+        on every tile (useful for threshold tuning and inspecting mistakes).
+
+        INPUTS: tiles (list of PIL images)
+
+        OUTPUTS: N x C float tensor on the CPU, columns in self.classes order
+        """
+        batch = torch.stack([self.transform(tile.convert("RGB")) for tile in tiles])
+        return predict(self.model, batch, self.device).float().cpu()
+
+    def solve(self, challenge):
+        """
+        FUNCTION NAME: solve
+
+        DESCRIPTION: This selects the tiles whose target-class probability
+        is at or above the target's threshold.
+
+        INPUTS: challenge (Challenge)
+
+        OUTPUTS: sorted list of selected tile indices (ints 0-8)
+        """
+        if challenge.target not in self.classes:
+            raise ValueError(f"Target {challenge.target!r} is not one of the model's classes {self.classes}.")
+        column = self.classes.index(challenge.target)
+        probabilities = self.tile_probabilities(challenge.tiles)[:, column].tolist()
+        threshold = self.thresholds[challenge.target]
+        return [index for index, probability in enumerate(probabilities) if probability >= threshold]
+
+
 #############################################################
 #   FUNCTIONS
 #############################################################
-def make_solver(name, seed=None, p=None):
+def make_solver(name, seed=None, p=None, checkpoint=None, device="cpu", required_classes=None):
     """
     FUNCTION NAME: make_solver
 
     DESCRIPTION: This builds a solver from its name.
 
-    INPUTS: name (str), seed (int or None), p (float, noisy only)
+    INPUTS: name (str: "oracle", "random", "noisy", or "model"),
+    seed (int or None), p (float, noisy only), checkpoint (path, model
+    only), device (str or torch.device, model only), required_classes
+    (list of str, model only)
 
     OUTPUTS: Solver
     """
@@ -205,6 +294,10 @@ def make_solver(name, seed=None, p=None):
             raise ValueError("p must be provided for NoisySolver")
         else:
             solve = NoisySolver(p, seed)
+    elif name == "model":
+        if checkpoint is None:
+            raise ValueError("checkpoint must be provided for ModelSolver")
+        solve = ModelSolver(checkpoint, device=device, required_classes=required_classes)
     else:
         raise ValueError(f"Unknown solver name: {name}")
     return solve

@@ -42,7 +42,7 @@ class TestMain:
 
         Outputs: None
         """
-        assert main() == 0
+        assert main([]) == 0
 
 class TestCaptchaEnv:
     """

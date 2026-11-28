@@ -75,8 +75,8 @@ ECEN4273_Project2/
 │   ├── dataset.py          # PyTorch datasets: image folders, labels.csv, synthetic tiles
 │   ├── gui.py              # Tkinter window for playing challenges by hand
 │   ├── model.py            # ResNet-18 classifier, predict, save/load checkpoints
-│   ├── solvers.py          # Baseline solvers and make_solver
-│   ├── tile_sources.py     # Tile image sources (synthetic placeholder tiles for now)
+│   ├── solvers.py          # Baseline solvers, ModelSolver, and make_solver
+│   ├── tile_sources.py     # Tile sources: synthetic placeholders and real image folders
 │   └── train.py            # Training loop (python -m Library.train)
 ├── Training/
 │   └── plot_history.py     # Plots training curves, live or to a PNG
@@ -277,16 +277,46 @@ print(checkpoint["classes"], checkpoint["best_epoch"])
 
 ## Usage
 
-`main.py` has no commands yet, so for now the project is used from Python. Run everything from the repository root, since `Library` is imported as a package.
+Run everything from the repository root, since `Library` is imported as a package.
 
-### Play challenges by hand
+### Command line
+
+```bash
+# Play challenges by hand (synthetic tiles, or real test images)
+python main.py play
+python main.py play --data Image-Data/test
+
+# Compare the baselines on real test images
+python main.py bench --data Image-Data/test -n 1000
+
+# Add the trained model (checkpoints/model.pt by default)
+python main.py bench --data Image-Data/test -n 1000 --solver oracle random noisy model
+```
+
+```
+solver        n  pass rate  tile acc  precision  recall  ms/chal
+----------------------------------------------------------------
+oracle     1000     100.0%     1.000      1.000   1.000     ...
+```
+
+| Option | Commands | Default | Meaning |
+|--------|----------|---------|---------|
+| `--data` | both | synthetic tiles | Split folder with one subfolder per class. Benchmark on `Image-Data/test` only |
+| `--seed` | both | 0 | Challenge seed; every solver sees the same challenges |
+| `--solver` | bench | `oracle random noisy` | Any of `oracle`, `random`, `noisy`, `model` |
+| `-n` | bench | 1000 | Challenges per solver |
+| `--p` | bench | 0.9 | Per-tile accuracy of the noisy solver |
+| `--checkpoint` | bench | `checkpoints/model.pt` | Model for `--solver model` |
+| `--device` | bench | `auto` | `auto`, `cuda`, or `cpu` for the model |
+
+### Play challenges by hand from Python
 
 ```python
 from Library.captcha_env import CaptchaEnv
 from Library.gui import CaptchaApp
-from Library.tile_sources import SyntheticTileSource
+from Library.tile_sources import FolderTileSource
 
-env = CaptchaEnv(SyntheticTileSource())
+env = CaptchaEnv(FolderTileSource("Image-Data/test"))
 CaptchaApp(env).run()
 ```
 
@@ -314,6 +344,17 @@ A challenge passes only if all 9 tiles are right. These baselines set the refere
 | `oracle` | Returns the correct answer | 100% |
 | `random` | Selects each tile on a coin flip | About 0.2% (1/512) |
 | `noisy` | Gets each tile right with probability `p` | About `p`^9 (39% at `p=0.9`) |
+| `model` | Selects tiles whose model probability for the target is at or above the class threshold (0.5 until tuned) | Measured below |
+
+The model solver only looks at the tiles and the target, never the answer:
+
+```python
+from Library.solvers import ModelSolver
+from Library.tile_sources import FolderTileSource
+
+source = FolderTileSource("Image-Data/test")
+solver = ModelSolver("checkpoints/model.pt", device="cuda", required_classes=source.classes)
+```
 
 ### Benchmark solvers
 
@@ -346,13 +387,11 @@ To benchmark a single solver, use `run_benchmark(env, solver, n)` with a seeded 
 | `recall` | Of the target tiles, the fraction that were selected |
 | `seconds_per_challenge` | Average time to solve and grade one challenge |
 
-_Add the command-line options for benchmarking, training, evaluation, and inference here as they are built._
-
 ---
 
 ## Testing
 
-Unit tests are in `Unit-Tests/`: `unit_test.py` covers the environment, tile sources, GUI, solvers, and benchmark, `test_dataset.py` covers the dataset loader, and `test_train.py` covers the training loop and checkpoints (both need PyTorch installed; the training tests run on the CPU with tiny synthetic data, so they need no GPU or download). To run them:
+Unit tests are in `Unit-Tests/`: `unit_test.py` covers the environment, tile sources, GUI, solvers, and benchmark, `test_dataset.py` covers the dataset loader, `test_train.py` covers the training loop and checkpoints, `test_model_solver.py` covers `FolderTileSource` and `ModelSolver`, and `test_main.py` covers the command line (these four need PyTorch installed but not tkinter; the training tests run on the CPU with tiny synthetic data, so they need no GPU or download). To run them:
 
 ```bash
 python -m pytest Unit-Tests
@@ -409,4 +448,4 @@ _Add confusion matrices and a discussion of the test results here._
 |------|
 | Zane Francis |
 | Erica Saenz |
-| Aek Nithianandan |
+| Aek Nithianandan |

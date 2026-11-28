@@ -154,7 +154,11 @@ class CaptchaEnv:
         # Get the tiles based on the labels from the source
         tiles:list = [self.source.get_tile(label, self.rng) for label in labels]
         # Return a new Challenge object with a unique ID, target label, tiles, and labels
-        return Challenge(id=str(uuid.uuid4()), target=target, tiles=tiles, labels=labels)
+        # Record where each tile came from when the source provides it (FolderTileSource)
+        sources:list = [tile.info.get("source") for tile in tiles]
+        if any(source is None for source in sources):
+            sources = []
+        return Challenge(id=str(uuid.uuid4()), target=target, tiles=tiles, labels=labels, sources=sources)
 
     def grade(self, challenge: Challenge, selection: list):
 
@@ -195,14 +199,4 @@ class CaptchaEnv:
 #############################################################
 #   FUNCTIONS
 #############################################################
-def render_grid(challenge: Challenge, tile_size=100):
-    """
-    FUNCTION NAME: render_grid
-
-    DESCRIPTION: This function renders the captcha challenge grid as an image.
-
-    INPUTS: challenge, tile_size
-
-    OUTPUTS: img
-    """
     
