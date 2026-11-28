@@ -32,14 +32,7 @@ DATA_DIR = PROJECT_DIR / "Image-Data"
 
 TRAIN_ZIP = DATA_DIR / "original" / "train2017.zip"
 
-ANNOTATIONS = (
-    Path.home()
-    / "fiftyone"
-    / "coco-2017"
-    / "raw"
-    / "instances_train2017.json"
-)
-
+ANNOTATIONS = DATA_DIR / "original" / "instances_train2017.json"
 #############################################################
 #   Dataset Configuration
 #############################################################
